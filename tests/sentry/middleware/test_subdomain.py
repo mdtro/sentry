@@ -8,7 +8,6 @@ class SubdomainMiddlewareTest(TestCase):
     def test_attaches_subdomain_attribute(self):
 
         options = {
-            "system.url-prefix": "http://dev.getsentry.net:8000",
             "system.base-hostname": "us.dev.getsentry.net:8000",
         }
 
