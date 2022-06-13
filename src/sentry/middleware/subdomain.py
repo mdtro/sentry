@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Callable
-from urllib.parse import urlparse
 
 from rest_framework.request import Request
 from rest_framework.response import Response
