@@ -18,30 +18,25 @@ class SubdomainMiddleware:
     """
 
     def __init__(self, get_response: Callable[[Request], Response]):
-        self.url_prefix = options.get("system.url-prefix")
-        self.netloc = ""
+        self.base_hostname = options.get("system.base-hostname")
 
-        if self.url_prefix:
-            self.url_prefix = self.url_prefix.rstrip("/")
-
-            parsed_url_prefix = urlparse(self.url_prefix)
-            self.netloc = parsed_url_prefix.netloc.lower()
+        if self.base_hostname:
+            self.base_hostname = self.base_hostname.rstrip("/")
 
         self.get_response = get_response
 
     def __call__(self, request: Request) -> Response:
         setattr(request, "subdomain", None)
 
-        netloc = self.netloc
-        if not self.url_prefix or not netloc:
+        if not self.base_hostname:
             return self.get_response(request)
 
         host = request.get_host().lower()
 
-        if not host.endswith(f".{netloc}"):
+        if not host.endswith(f".{self.base_hostname}"):
             return self.get_response(request)
 
-        subdomain = host[: -len(netloc)].rstrip(".")
+        subdomain = host[: -len(self.base_hostname)].rstrip(".")
 
         if len(subdomain) == 0:
             subdomain = None
