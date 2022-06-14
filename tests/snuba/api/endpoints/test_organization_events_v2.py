@@ -5984,7 +5984,10 @@ class OrganizationEventsEndpointTest(APITestCase, SnubaTestCase):
         )
 
     def reverse_url(self):
-        return reverse(self.viewname, kwargs={"organization_slug": self.organization.slug},)
+        return reverse(
+            self.viewname,
+            kwargs={"organization_slug": self.organization.slug},
+        )
 
     def do_request(self, query, features=None):
         if features is None:
