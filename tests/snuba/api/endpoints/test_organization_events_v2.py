@@ -5977,11 +5977,7 @@ class OrganizationEventsEndpointTest(APITestCase, SnubaTestCase):
         self.features = {}
 
     def client_get(self, *args, **kwargs):
-        return self.client.get(
-            *args,
-            **kwargs,
-            HTTP_HOST=generate_customer_url(self.organization.slug, region="us"),
-        )
+        return self.client.get(*args,**kwargs)
 
     def reverse_url(self):
         return reverse(
