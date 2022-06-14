@@ -10981,14 +10981,30 @@ class CustomerOrganizationEventsEndpointTest(OrganizationEventsEndpointTest):
     viewname = "sentry-api-0-subdomain-organization-events"
 
     def client_get(self, *args, **kwargs):
+        if "HTTP_HOST" not in kwargs:
+            kwargs["HTTP_HOST"] = generate_customer_url(self.organization.slug, region="us")
         return self.client.get(
             *args,
             **kwargs,
-            HTTP_HOST=generate_customer_url(self.organization.slug, region="us"),
         )
 
     def reverse_url(self):
         return reverse(self.viewname)
+
+    def test_invalid_org_slug(self):
+        self.organization.slug = "not-found"
+        response = self.do_request({})
+
+        assert response.status_code == 404, response.content
+
+    def test_non_customer_base_host(self):
+        self.login_as(user=self.user)
+        with self.feature({"organizations:discover-basic": True}):
+            query = {}
+            response = self.client_get(
+                self.reverse_url(), query, format="json", HTTP_HOST="testserver"
+            )
+            assert response.status_code == 404, response.content
 
 
 class OrganizationEventsMetricsEnhancedPerformanceEndpointTest(MetricsEnhancedPerformanceTestCase):
