@@ -106,8 +106,16 @@ export type Member = {
   projects: string[];
   role: string;
   roleName: string;
-  roles: MemberRole[]; // TODO(ts): This is not present from API call
-  teams: string[];
+  roles: OrgRole[]; // Deprecated: use orgRoleList
+
+  teamRoleList: TeamRole[]; // TODO: Move to global store
+  teamRoles: {
+    isActive: boolean;
+    role: TeamRole['id'];
+    teamSlug: string;
+  }[];
+  teams: string[]; // # Deprecated, use teamRoles
+
   user: User;
 };
 
