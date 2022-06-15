@@ -7,8 +7,7 @@ from sentry.testutils import APITestCase
 
 
 class IntegrationEndpointTest(APITestCase):
-    def setUp(self):
-        self.endpoint = IntegrationEndpoint()
+    endpoint = IntegrationEndpoint()
 
     def test_handle_exception(self):
         exc = APIException("There was a problem!")
