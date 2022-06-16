@@ -10,13 +10,13 @@
   "author": "sentry.io",
   "license": "UNLICENSED",
   "dependencies": {
-    "js-yaml": "^3.14.0",
-    "json-diff": "^0.7.1",
-    "json-refs": "^3.0.15",
-    "openapi-examples-validator": "^4.1.1"
+    "js-yaml": "3.14.1",
+    "json-diff": "0.7.2",
+    "json-refs": "3.0.15",
+    "openapi-examples-validator": "4.6.0"
   },
   "devDependencies": {
-    "@types/js-yaml": "^4.0.5",
-    "@types/json-diff": "^0.7.0"
+    "@types/js-yaml": "4.0.5",
+    "@types/json-diff": "0.7.0"
   }
 }
