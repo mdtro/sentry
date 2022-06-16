@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:base", ":preserveSemverRanges"],
+  "extends": ["config:base", ":preserveSemverRanges", "monorepo:*"],
   "pip_requirements": {
     "fileMatch": [
       "(^|/)([\\w-]*)requirements\\.(txt|pip)$",
