@@ -1,3 +1,15 @@
 {
-  "$schema": "https://docs.renovatebot.com/renovate-schema.json"
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:base"],
+  "ignorePaths": [
+      "**/node_modules/**",
+      "**/bower_components/**",
+      "**/vendor/**",
+      "**/examples/**",
+      "**/__tests__/**",
+      "**/test/**",
+      "**/tests/**",
+      "**/__fixtures__/**"
+  ],
+  "separateMinorPatch": false
 }
