@@ -181,6 +181,18 @@
           "type": "framework",
           "id": "javascript-vue",
           "name": "Vue"
+        },
+        {
+          "link": "https://docs.sentry.io/platforms/javascript/guides/remix/",
+          "type": "framework",
+          "id": "javascript-remix",
+          "name": "Remix"
+        },
+        {
+          "link": "https://docs.sentry.io/platforms/javascript/guides/svelte/",
+          "type": "framework",
+          "id": "javascript-svelte",
+          "name": "Svelte"
         }
       ],
       "id": "javascript",
@@ -295,6 +307,18 @@
           "type": "framework",
           "id": "python-flask",
           "name": "Flask"
+        },
+        {
+          "link": "https://docs.getsentry.com/clients/python/integrations/starlette/",
+          "type": "framework",
+          "id": "python-starlette",
+          "name": "Starlette"
+        },
+        {
+          "link": "https://docs.getsentry.com/clients/python/integrations/fastapi/",
+          "type": "framework",
+          "id": "python-fastapi",
+          "name": "FastAPI"
         },
         {
           "link": "https://docs.getsentry.com/clients/python/integrations/pylons/",

@@ -1,20 +1,29 @@
 import Breadcrumbs from 'sentry/components/events/interfaces/breadcrumbs';
-import Csp from 'sentry/components/events/interfaces/csp';
-import DebugMeta from 'sentry/components/events/interfaces/debugMeta';
-import DebugMetaV2 from 'sentry/components/events/interfaces/debugMeta-v2';
+import {Csp} from 'sentry/components/events/interfaces/csp';
+import {DebugMeta} from 'sentry/components/events/interfaces/debugMeta';
 import Exception from 'sentry/components/events/interfaces/exception';
 import ExceptionV2 from 'sentry/components/events/interfaces/exceptionV2';
-import Generic from 'sentry/components/events/interfaces/generic';
-import Message from 'sentry/components/events/interfaces/message';
-import Request from 'sentry/components/events/interfaces/request';
+import {Generic} from 'sentry/components/events/interfaces/generic';
+import {Message} from 'sentry/components/events/interfaces/message';
+import {SpanEvidenceSection} from 'sentry/components/events/interfaces/performance/spanEvidence';
+import {Request} from 'sentry/components/events/interfaces/request';
 import Spans from 'sentry/components/events/interfaces/spans';
 import StackTrace from 'sentry/components/events/interfaces/stackTrace';
 import StackTraceV2 from 'sentry/components/events/interfaces/stackTraceV2';
-import Template from 'sentry/components/events/interfaces/template';
+import {Template} from 'sentry/components/events/interfaces/template';
 import Threads from 'sentry/components/events/interfaces/threads';
 import ThreadsV2 from 'sentry/components/events/interfaces/threadsV2';
-import {Group, Organization, Project, SharedViewOrganization} from 'sentry/types';
+import {
+  Group,
+  IssueCategory,
+  Organization,
+  Project,
+  SharedViewOrganization,
+} from 'sentry/types';
 import {Entry, EntryType, Event, EventTransaction} from 'sentry/types/event';
+
+import {Resources} from './interfaces/performance/resources';
+import {getResourceDescription, getResourceLinks} from './interfaces/performance/utils';
 
 type Props = Pick<React.ComponentProps<typeof Breadcrumbs>, 'route' | 'router'> & {
   entry: Entry;
@@ -22,6 +31,7 @@ type Props = Pick<React.ComponentProps<typeof Breadcrumbs>, 'route' | 'router'> 
   organization: SharedViewOrganization | Organization;
   projectSlug: Project['slug'];
   group?: Group;
+  isShare?: boolean;
 };
 
 function EventEntry({
@@ -30,6 +40,7 @@ function EventEntry({
   event,
   organization,
   group,
+  isShare,
   route,
   router,
 }: Props) {
@@ -45,21 +56,18 @@ function EventEntry({
 
   switch (entry.type) {
     case EntryType.EXCEPTION: {
-      const {data, type} = entry;
       return hasNativeStackTraceV2 ? (
         <ExceptionV2
-          type={type}
           event={event}
-          data={data}
+          data={entry.data}
           projectId={projectSlug}
           groupingCurrentLevel={groupingCurrentLevel}
           hasHierarchicalGrouping={hasHierarchicalGrouping}
         />
       ) : (
         <Exception
-          type={type}
           event={event}
-          data={data}
+          data={entry.data}
           projectId={projectSlug}
           groupingCurrentLevel={groupingCurrentLevel}
           hasHierarchicalGrouping={hasHierarchicalGrouping}
@@ -67,29 +75,24 @@ function EventEntry({
       );
     }
     case EntryType.MESSAGE: {
-      const {data} = entry;
-      return <Message data={data} />;
+      return <Message event={event} data={entry.data} />;
     }
     case EntryType.REQUEST: {
-      const {data, type} = entry;
-      return <Request type={type} event={event} data={data} />;
+      return <Request event={event} data={entry.data} />;
     }
     case EntryType.STACKTRACE: {
-      const {data, type} = entry;
       return hasNativeStackTraceV2 ? (
         <StackTraceV2
-          type={type}
           event={event}
-          data={data}
+          data={entry.data}
           projectId={projectSlug}
           groupingCurrentLevel={groupingCurrentLevel}
           hasHierarchicalGrouping={hasHierarchicalGrouping}
         />
       ) : (
         <StackTrace
-          type={type}
           event={event}
-          data={data}
+          data={entry.data}
           projectId={projectSlug}
           groupingCurrentLevel={groupingCurrentLevel}
           hasHierarchicalGrouping={hasHierarchicalGrouping}
@@ -97,48 +100,47 @@ function EventEntry({
       );
     }
     case EntryType.TEMPLATE: {
-      const {data, type} = entry;
-      return <Template type={type} event={event} data={data} />;
+      return <Template event={event} data={entry.data} />;
     }
     case EntryType.CSP: {
-      const {data} = entry;
-      return <Csp event={event} data={data} />;
+      return <Csp event={event} data={entry.data} />;
     }
     case EntryType.EXPECTCT:
-    case EntryType.EXPECTSTAPLE:
-    case EntryType.HPKP: {
+    case EntryType.EXPECTSTAPLE: {
       const {data, type} = entry;
       return <Generic type={type} data={data} />;
     }
+    case EntryType.HPKP:
+      return (
+        <Generic type={entry.type} data={entry.data} meta={event._meta?.hpkp ?? {}} />
+      );
+
     case EntryType.BREADCRUMBS: {
-      const {data, type} = entry;
       return (
         <Breadcrumbs
-          type={type}
-          data={data}
+          data={entry.data}
           organization={organization as Organization}
           event={event}
           router={router}
           route={route}
+          isShare={isShare}
+          projectSlug={projectSlug}
         />
       );
     }
     case EntryType.THREADS: {
-      const {data, type} = entry;
       return hasNativeStackTraceV2 ? (
         <ThreadsV2
-          type={type}
           event={event}
-          data={data}
+          data={entry.data}
           projectId={projectSlug}
           groupingCurrentLevel={groupingCurrentLevel}
           hasHierarchicalGrouping={hasHierarchicalGrouping}
         />
       ) : (
         <Threads
-          type={type}
           event={event}
-          data={data}
+          data={entry.data}
           projectId={projectSlug}
           groupingCurrentLevel={groupingCurrentLevel}
           hasHierarchicalGrouping={hasHierarchicalGrouping}
@@ -146,36 +148,48 @@ function EventEntry({
       );
     }
     case EntryType.DEBUGMETA:
-      const {data} = entry;
-      const hasImagesLoadedV2Feature =
-        !!organization.features?.includes('images-loaded-v2');
+      return (
+        <DebugMeta
+          event={event}
+          projectId={projectSlug}
+          groupId={group?.id}
+          organization={organization as Organization}
+          data={entry.data}
+        />
+      );
+    case EntryType.SPANS:
+      // XXX: We currently do not show spans in the share view,
+      if (isShare) {
+        return null;
+      }
 
-      if (hasImagesLoadedV2Feature) {
+      if (
+        group?.issueCategory === IssueCategory.PERFORMANCE &&
+        organization?.features?.includes('performance-issues')
+      ) {
         return (
-          <DebugMetaV2
-            event={event}
-            projectId={projectSlug}
-            groupId={group?.id}
+          <SpanEvidenceSection
+            event={event as EventTransaction}
             organization={organization as Organization}
-            data={data as React.ComponentProps<typeof DebugMetaV2>['data']}
           />
         );
       }
 
       return (
-        <DebugMeta
-          event={event}
-          projectId={projectSlug}
-          organization={organization as Organization}
-          data={data}
-        />
-      );
-
-    case EntryType.SPANS:
-      return (
         <Spans
           event={event as EventTransaction}
           organization={organization as Organization}
+        />
+      );
+    case EntryType.RESOURCES:
+      if (!group || !group.issueType) {
+        return null;
+      }
+
+      return (
+        <Resources
+          description={getResourceDescription(group.issueType)}
+          links={getResourceLinks(group.issueType, event.platform)}
         />
       );
     default:

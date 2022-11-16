@@ -31,7 +31,7 @@ type Props = RouteComponentProps<{orgId: string}, {}> & {
 };
 
 type State = {
-  ruleList?: CombinedMetricIssueAlerts[];
+  ruleList?: CombinedMetricIssueAlerts[] | null;
   teamFilterSearch?: string;
 };
 
@@ -58,10 +58,10 @@ class AlertRulesList extends AsyncComponent<Props, State & AsyncComponent['state
     ];
   }
 
-  get projectsFromIncidents() {
-    const {ruleList = []} = this.state;
+  get projectsFromResults() {
+    const ruleList = this.state.ruleList ?? [];
 
-    return [...new Set(ruleList?.map(({projects}) => projects).flat())];
+    return [...new Set(ruleList.map(({projects}) => projects).flat())];
   }
 
   handleChangeFilter = (activeFilters: string[]) => {
@@ -217,9 +217,9 @@ class AlertRulesList extends AsyncComponent<Props, State & AsyncComponent['state
                 isEmpty={ruleList?.length === 0}
                 emptyMessage={t('No alert rules found for the current query.')}
               >
-                <Projects orgId={orgId} slugs={this.projectsFromIncidents}>
+                <Projects orgId={orgId} slugs={this.projectsFromResults}>
                   {({initiallyLoaded, projects}) =>
-                    ruleList.map(rule => (
+                    ruleList?.map(rule => (
                       <RuleListRow
                         // Metric and issue alerts can have the same id
                         key={`${
@@ -232,9 +232,6 @@ class AlertRulesList extends AsyncComponent<Props, State & AsyncComponent['state
                         onOwnerChange={this.handleOwnerChange}
                         onDelete={this.handleDeleteRule}
                         userTeams={new Set(teams.map(team => team.id))}
-                        hasDuplicateAlertRules={organization.features.includes(
-                          'duplicate-alert-rule'
-                        )}
                         hasEditAccess={hasEditAccess}
                       />
                     ))
@@ -264,23 +261,13 @@ class AlertRulesList extends AsyncComponent<Props, State & AsyncComponent['state
   }
 
   renderBody() {
-    const {params, organization, router} = this.props;
+    const {params, router} = this.props;
     const {orgId} = params;
 
     return (
       <SentryDocumentTitle title={t('Alerts')} orgSlug={orgId}>
-        <PageFiltersContainer
-          organization={organization}
-          showDateSelector={false}
-          showEnvironmentSelector={false}
-          hideGlobalHeader
-        >
-          <AlertHeader
-            organization={organization}
-            router={router}
-            activeTab="rules"
-            projectSlugs={this.projectsFromIncidents}
-          />
+        <PageFiltersContainer>
+          <AlertHeader router={router} activeTab="rules" />
           {this.renderList()}
         </PageFiltersContainer>
       </SentryDocumentTitle>

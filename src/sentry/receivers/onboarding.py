@@ -14,11 +14,14 @@ from sentry.models import (
     Project,
 )
 from sentry.plugins.bases import IssueTrackingPlugin, IssueTrackingPlugin2
+from sentry.services.hybrid_cloud.user import APIUser
 from sentry.signals import (
     alert_rule_created,
     event_processed,
     first_event_pending,
     first_event_received,
+    first_profile_received,
+    first_replay_received,
     first_transaction_received,
     integration_added,
     issue_tracker_used,
@@ -132,7 +135,7 @@ def record_first_event(project, event, **kwargs):
     )
 
     try:
-        user = Organization.objects.get(id=project.organization_id).get_default_owner()
+        user: APIUser = Organization.objects.get(id=project.organization_id).get_default_owner()
     except IndexError:
         logging.getLogger("sentry").warning(
             "Cannot record first event for organization (%s) due to missing owners",
@@ -140,7 +143,17 @@ def record_first_event(project, event, **kwargs):
         )
         return
 
+    # this event fires once per project
+    analytics.record(
+        "first_event_for_project.sent",
+        user_id=user.id,
+        organization_id=project.organization_id,
+        project_id=project.id,
+        platform=event.platform,
+    )
+
     if rows_affected or created:
+        # this event only fires once per org
         analytics.record(
             "first_event.sent",
             user_id=user.id,
@@ -205,6 +218,46 @@ def record_first_transaction(project, event, **kwargs):
     )
 
 
+@first_profile_received.connect(weak=False)
+def record_first_profile(project, **kwargs):
+    project.update(flags=F("flags").bitor(Project.flags.has_profiles))
+
+    try:
+        default_user_id = project.organization.get_default_owner().id
+    except IndexError:
+        default_user_id = None
+
+    analytics.record(
+        "first_profile.sent",
+        default_user_id=default_user_id,
+        organization_id=project.organization_id,
+        project_id=project.id,
+        platform=project.platform,
+    )
+
+
+@first_replay_received.connect(weak=False)
+def record_first_replay(project, **kwargs):
+    project.update(flags=F("flags").bitor(Project.flags.has_replays))
+
+    success = OrganizationOnboardingTask.objects.record(
+        organization_id=project.organization_id,
+        task=OnboardingTask.SESSION_REPLAY,
+        status=OnboardingTaskStatus.COMPLETE,
+        date_completed=timezone.now(),
+    )
+
+    if success:
+        analytics.record(
+            "first_replay.sent",
+            user_id=project.organization.default_owner_id,
+            organization_id=project.organization_id,
+            project_id=project.id,
+            platform=project.platform,
+        )
+        try_mark_onboarding_complete(project.organization_id)
+
+
 @member_invited.connect(weak=False)
 def record_member_invited(member, user, **kwargs):
     OrganizationOnboardingTask.objects.record(
@@ -251,7 +304,7 @@ def record_release_received(project, event, **kwargs):
     )
     if success:
         try:
-            user = Organization.objects.get(id=project.organization_id).get_default_owner()
+            user: APIUser = Organization.objects.get(id=project.organization_id).get_default_owner()
         except IndexError:
             logging.getLogger("sentry").warning(
                 "Cannot record release received for organization (%s) due to missing owners",
@@ -288,7 +341,9 @@ def record_user_context_received(project, event, **kwargs):
         )
         if success:
             try:
-                user = Organization.objects.get(id=project.organization_id).get_default_owner()
+                user: APIUser = Organization.objects.get(
+                    id=project.organization_id
+                ).get_default_owner()
             except IndexError:
                 logging.getLogger("sentry").warning(
                     "Cannot record user context received for organization (%s) due to missing owners",
@@ -322,7 +377,7 @@ def record_sourcemaps_received(project, event, **kwargs):
     )
     if success:
         try:
-            user = Organization.objects.get(id=project.organization_id).get_default_owner()
+            user: APIUser = Organization.objects.get(id=project.organization_id).get_default_owner()
         except IndexError:
             logging.getLogger("sentry").warning(
                 "Cannot record sourcemaps received for organization (%s) due to missing owners",

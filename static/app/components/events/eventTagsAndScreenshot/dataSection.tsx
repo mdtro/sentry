@@ -15,7 +15,7 @@ type Props = {
   className?: string;
 };
 
-function DataSection({title, description, children, className, ...props}: Props) {
+export function DataSection({title, description, children, className, ...props}: Props) {
   const type = kebabCase(title);
   return (
     <StyledEventDataSection
@@ -27,7 +27,7 @@ function DataSection({title, description, children, className, ...props}: Props)
           <GuideAnchor target={type} position="bottom">
             <Title>{title}</Title>
           </GuideAnchor>
-          <QuestionTooltip size="xs" position="top" title={description} />
+          <QuestionTooltip size="sm" position="top" title={description} />
         </TitleWrapper>
       }
       wrapTitle={false}
@@ -37,8 +37,6 @@ function DataSection({title, description, children, className, ...props}: Props)
     </StyledEventDataSection>
   );
 }
-
-export default DataSection;
 
 const TitleWrapper = styled('div')`
   display: grid;

@@ -20,7 +20,7 @@ import {Series} from 'sentry/types/echarts';
 import {getUtcToLocalDateObject} from 'sentry/utils/dates';
 import {axisLabelFormatter} from 'sentry/utils/discover/charts';
 import EventView from 'sentry/utils/discover/eventView';
-import {PlotType} from 'sentry/utils/discover/fields';
+import {aggregateOutputType, PlotType} from 'sentry/utils/discover/fields';
 import {DisplayModes, TOP_N} from 'sentry/utils/discover/types';
 import {decodeScalar} from 'sentry/utils/queryString';
 import {Theme} from 'sentry/utils/theme';
@@ -66,7 +66,11 @@ class MiniGraph extends Component<Props> {
     const topEvents = isTopEvents ? TOP_N : undefined;
     const orderby = isTopEvents ? decodeScalar(apiPayload.sort) : undefined;
     const intervalFidelity = display === 'bar' ? 'low' : 'high';
-    const interval = isDaily ? '1d' : getInterval({start, end, period}, intervalFidelity);
+    const interval = isDaily
+      ? '1d'
+      : eventView.interval
+      ? eventView.interval
+      : getInterval({start, end, period}, intervalFidelity);
 
     return {
       organization,
@@ -238,7 +242,6 @@ class MiniGraph extends Component<Props> {
             lineStyle: {
               opacity: chartType === 'line' ? 1 : 0,
             },
-            smooth: true,
           }));
 
           const hasOther = topEvents && topEvents + 1 === allSeries.length;
@@ -270,7 +273,7 @@ class MiniGraph extends Component<Props> {
                 formatter: (value: number) =>
                   axisLabelFormatter(
                     value,
-                    Array.isArray(yAxis) ? yAxis[0] : yAxis,
+                    aggregateOutputType(Array.isArray(yAxis) ? yAxis[0] : yAxis),
                     true
                   ),
                 inside: true,

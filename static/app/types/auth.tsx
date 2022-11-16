@@ -1,6 +1,6 @@
 import type u2f from 'u2f-api';
 
-import type {Field} from 'sentry/components/forms/type';
+import type {Field} from 'sentry/components/forms/types';
 
 import type {Organization} from './organization';
 
@@ -32,6 +32,10 @@ export type Authenticator = {
    */
   description: string;
   devices: AuthenticatorDevice[];
+  /**
+   * New enrollments of this 2FA interface are not allowed
+   */
+  disallowNewEnrollment: boolean;
   /**
    * String used to display on button for user as CTA to enroll
    */

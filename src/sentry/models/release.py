@@ -8,7 +8,7 @@ from time import time
 from typing import List, Mapping, Optional, Sequence, Union
 
 import sentry_sdk
-from django.db import IntegrityError, models, router
+from django.db import IntegrityError, models, router, transaction
 from django.db.models import Case, F, Func, Q, Subquery, Sum, Value, When
 from django.db.models.signals import pre_save
 from django.utils import timezone
@@ -16,7 +16,6 @@ from django.utils.functional import cached_property
 from django.utils.translation import ugettext_lazy as _
 from sentry_relay import RelayError, parse_release
 
-from sentry.app import locks
 from sentry.constants import BAD_RELEASE_CHARS, COMMIT_RANGE_DELIMITER
 from sentry.db.models import (
     ArrayField,
@@ -26,9 +25,12 @@ from sentry.db.models import (
     FlexibleForeignKey,
     JSONField,
     Model,
+    region_silo_only_model,
     sane_repr,
 )
+from sentry.dynamic_sampling.feature_multiplexer import DynamicSamplingFeatureMultiplexer
 from sentry.exceptions import InvalidSearchQuery
+from sentry.locks import locks
 from sentry.models import (
     Activity,
     BaseManager,
@@ -39,6 +41,7 @@ from sentry.models import (
 )
 from sentry.models.grouphistory import GroupHistoryStatus, record_group_history
 from sentry.signals import issue_resolved
+from sentry.tasks.relay import schedule_invalidate_project_config
 from sentry.utils import metrics
 from sentry.utils.cache import cache
 from sentry.utils.db import atomic_transaction
@@ -66,6 +69,69 @@ class ReleaseCommitError(Exception):
     pass
 
 
+def ds_rules_contain_latest_release_rule(rules):
+    """
+    This function checks that one of the active rules
+    has value "latest" as release literal
+    """
+
+    # We don't have proper schema and type validate in rules object
+    try:
+        for rule in rules:
+            if rule.get("active"):
+                inner_rule = rule["condition"]["inner"]
+                if (
+                    inner_rule
+                    and inner_rule[0]["name"] == "trace.release"
+                    and inner_rule[0]["value"] == ["latest"]
+                ):
+                    return True
+    except Exception:
+        sentry_sdk.capture_exception()
+    return False
+
+
+class ReleaseProjectModelManager(BaseManager):
+    def post_save(self, instance, **kwargs):
+        # this hook may be called from model hooks during an
+        # open transaction. In that case, wait until the current transaction has
+        # been committed or rolled back to ensure we don't read stale data in the
+        # task.
+        #
+        # If there is no transaction open, on_commit should run immediately.
+        ds_feature_multiplexer = DynamicSamplingFeatureMultiplexer(instance.project)
+        if ds_feature_multiplexer.is_on_dynamic_sampling_deprecated:
+            dynamic_sampling = instance.project.get_option("sentry:dynamic_sampling")
+            if dynamic_sampling is not None and ds_rules_contain_latest_release_rule(
+                dynamic_sampling["rules"]
+            ):
+                transaction.on_commit(
+                    lambda: schedule_invalidate_project_config(
+                        project_id=instance.project.id, trigger="releaseproject.post_save"
+                    )
+                )
+
+    def post_delete(self, instance, **kwargs):
+        # this hook may be called from model hooks during an
+        # open transaction. In that case, wait until the current transaction has
+        # been committed or rolled back to ensure we don't read stale data in the
+        # task.
+        #
+        # If there is no transaction open, on_commit should run immediately.
+        ds_feature_multiplexer = DynamicSamplingFeatureMultiplexer(instance.project)
+        if ds_feature_multiplexer.is_on_dynamic_sampling_deprecated:
+            dynamic_sampling = instance.project.get_option("sentry:dynamic_sampling")
+            if dynamic_sampling is not None and ds_rules_contain_latest_release_rule(
+                dynamic_sampling["rules"]
+            ):
+                transaction.on_commit(
+                    lambda: schedule_invalidate_project_config(
+                        project_id=instance.project.id, trigger="releaseproject.post_delete"
+                    )
+                )
+
+
+@region_silo_only_model
 class ReleaseProject(Model):
     __include_in_export__ = False
 
@@ -75,6 +141,9 @@ class ReleaseProject(Model):
 
     adopted = models.DateTimeField(null=True, blank=True)
     unadopted = models.DateTimeField(null=True, blank=True)
+    first_seen_transaction = models.DateTimeField(null=True, blank=True)
+
+    objects = ReleaseProjectModelManager()
 
     class Meta:
         app_label = "sentry"
@@ -82,6 +151,7 @@ class ReleaseProject(Model):
         index_together = (
             ("project", "adopted"),
             ("project", "unadopted"),
+            ("project", "first_seen_transaction"),
         )
         unique_together = (("project", "release"),)
 
@@ -416,6 +486,7 @@ class ReleaseModelManager(BaseManager):
         return release_version or None
 
 
+@region_silo_only_model
 class Release(Model):
     """
     A release is generally created when a new version is pushed into a
@@ -440,7 +511,7 @@ class Release(Model):
     )
 
     # DEPRECATED
-    project_id = BoundedPositiveIntegerField(null=True)
+    project_id = BoundedBigIntegerField(null=True)
     version = models.CharField(max_length=DB_VERSION_LENGTH)
     # ref might be the branch name being released
     ref = models.CharField(max_length=DB_VERSION_LENGTH, null=True, blank=True)
@@ -483,6 +554,8 @@ class Release(Model):
     # later split up releases by project again.  This is for instance used
     # by the org release listing.
     _for_project_id = None
+    # the user agent that set the release
+    user_agent = models.TextField(null=True)
 
     # Custom Model Manager required to override create method
     objects = ReleaseModelManager()
@@ -529,16 +602,30 @@ class Release(Model):
 
     @staticmethod
     def is_valid_version(value):
+        if value is None:
+            return False
+
+        if any(c in value for c in BAD_RELEASE_CHARS):
+            return False
+
+        value_stripped = str(value).strip()
         return not (
-            not value
-            or any(c in value for c in BAD_RELEASE_CHARS)
-            or value in (".", "..")
-            or value.lower() == "latest"
+            not value_stripped
+            or value_stripped in (".", "..")
+            or value_stripped.lower() == "latest"
         )
 
     @property
     def is_semver_release(self):
         return self.package is not None
+
+    def get_previous_release(self, project):
+        """Get the release prior to this one. None if none exists"""
+        return (
+            ReleaseProject.objects.filter(project=project, release__date_added__lt=self.date_added)
+            .order_by("-release__date_added")
+            .first()
+        )
 
     @staticmethod
     def is_semver_version(version):
@@ -844,7 +931,7 @@ class Release(Model):
             if not RepositoryProvider.should_ignore_commit(c.get("message", ""))
         ]
         lock_key = type(self).get_lock_key(self.organization_id, self.id)
-        lock = locks.get(lock_key, duration=10)
+        lock = locks.get(lock_key, duration=10, name="release_set_commits")
         if lock.locked():
             # Signal failure to the consumer rapidly. This aims to prevent the number
             # of timeouts and prevent web worker exhaustion when customers create

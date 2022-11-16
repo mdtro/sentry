@@ -7,6 +7,8 @@ import {hideSidebar, showSidebar} from 'sentry/actionCreators/preferences';
 import Feature from 'sentry/components/acl/feature';
 import GuideAnchor from 'sentry/components/assistant/guideAnchor';
 import HookOrDefault from 'sentry/components/hookOrDefault';
+import PerformanceOnboardingSidebar from 'sentry/components/performanceOnboarding/sidebar';
+import ReplaysOnboardingSidebar from 'sentry/components/replaysOnboarding/sidebar';
 import {
   IconChevron,
   IconDashboard,
@@ -15,26 +17,30 @@ import {
   IconLightning,
   IconList,
   IconPlay,
+  IconProfiling,
   IconProject,
   IconReleases,
   IconSettings,
   IconSiren,
-  IconSpan,
   IconStats,
   IconSupport,
   IconTelescope,
 } from 'sentry/icons';
 import {t} from 'sentry/locale';
 import ConfigStore from 'sentry/stores/configStore';
+import DemoWalkthroughStore from 'sentry/stores/demoWalkthroughStore';
 import HookStore from 'sentry/stores/hookStore';
 import PreferencesStore from 'sentry/stores/preferencesStore';
 import SidebarPanelStore from 'sentry/stores/sidebarPanelStore';
 import {useLegacyStore} from 'sentry/stores/useLegacyStore';
 import space from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
+import {isDemoWalkthrough} from 'sentry/utils/demoMode';
 import {getDiscoverLandingUrl} from 'sentry/utils/discover/urls';
 import theme from 'sentry/utils/theme';
 import useMedia from 'sentry/utils/useMedia';
+
+import {ProfilingOnboardingSidebar} from '../profiling/ProfilingOnboarding/proflingOnboardingSidebar';
 
 import Broadcasts from './broadcasts';
 import SidebarHelp from './help';
@@ -53,6 +59,10 @@ type Props = {
   location?: Location;
   organization?: Organization;
 };
+
+function activatePanel(panel: SidebarPanelKey) {
+  SidebarPanelStore.activatePanel(panel);
+}
 
 function togglePanel(panel: SidebarPanelKey) {
   SidebarPanelStore.togglePanel(panel);
@@ -86,6 +96,14 @@ function Sidebar({location, organization}: Props) {
     return () => bcl.remove('body-sidebar');
   }, [bcl]);
 
+  useEffect(() => {
+    Object.values(SidebarPanelKey).forEach(key => {
+      if (location?.hash === `#sidebar-${key}`) {
+        togglePanel(key);
+      }
+    });
+  }, [location?.hash]);
+
   // Add sidebar collapse classname to body
   useEffect(() => {
     if (collapsed) {
@@ -100,7 +118,7 @@ function Sidebar({location, organization}: Props) {
   // Trigger panels depending on the location hash
   useEffect(() => {
     if (location?.hash === '#welcome') {
-      togglePanel(SidebarPanelKey.OnboardingWizard);
+      activatePanel(SidebarPanelKey.OnboardingWizard);
     }
   }, [location?.hash]);
 
@@ -115,12 +133,20 @@ function Sidebar({location, organization}: Props) {
     organization,
   };
 
+  const sidebarAnchor = isDemoWalkthrough() ? (
+    <GuideAnchor target="projects" disabled={!DemoWalkthroughStore.get('sidebar')}>
+      {t('Projects')}
+    </GuideAnchor>
+  ) : (
+    <GuideAnchor target="projects">{t('Projects')}</GuideAnchor>
+  );
+
   const projects = hasOrganization && (
     <SidebarItem
       {...sidebarItemProps}
       index
       icon={<IconProject size="md" />}
-      label={<GuideAnchor target="projects">{t('Projects')}</GuideAnchor>}
+      label={sidebarAnchor}
       to={`/organizations/${organization.slug}/projects/`}
       id="projects"
     />
@@ -131,7 +157,7 @@ function Sidebar({location, organization}: Props) {
       {...sidebarItemProps}
       icon={<IconIssues size="md" />}
       label={<GuideAnchor target="issues">{t('Issues')}</GuideAnchor>}
-      to={`/organizations/${organization.slug}/issues/`}
+      to={`/organizations/${organization.slug}/issues/?referrer=sidebar`}
       id="issues"
     />
   );
@@ -211,18 +237,20 @@ function Sidebar({location, organization}: Props) {
         label={t('Monitors')}
         to={`/organizations/${organization.slug}/monitors/`}
         id="monitors"
+        isBeta
       />
     </Feature>
   );
 
   const replays = hasOrganization && (
-    <Feature features={['session-replay']} organization={organization}>
+    <Feature features={['session-replay-ui']} organization={organization}>
       <SidebarItem
         {...sidebarItemProps}
         icon={<IconPlay size="md" />}
         label={t('Replays')}
         to={`/organizations/${organization.slug}/replays/`}
         id="replays"
+        isBeta
       />
     </Feature>
   );
@@ -255,10 +283,11 @@ function Sidebar({location, organization}: Props) {
       <SidebarItem
         {...sidebarItemProps}
         index
-        icon={<IconSpan size="md" />}
+        icon={<IconProfiling size="md" />}
         label={t('Profiling')}
         to={`/organizations/${organization.slug}/profiling/`}
         id="profiling"
+        isBeta
       />
     </Feature>
   );
@@ -294,7 +323,7 @@ function Sidebar({location, organization}: Props) {
   );
 
   return (
-    <SidebarWrapper collapsed={collapsed}>
+    <SidebarWrapper aria-label={t('Primary Navigation')} collapsed={collapsed}>
       <SidebarSectionGroupPrimary>
         <SidebarSection>
           <SidebarDropdown
@@ -313,17 +342,14 @@ function Sidebar({location, organization}: Props) {
                 {projects}
                 {issues}
                 {performance}
+                {profiling}
                 {releases}
+                {replays}
+                {monitors}
                 {userFeedback}
                 {alerts}
                 {discover2}
                 {dashboards}
-                {profiling}
-              </SidebarSection>
-
-              <SidebarSection>
-                {replays}
-                {monitors}
               </SidebarSection>
 
               <SidebarSection>
@@ -339,6 +365,24 @@ function Sidebar({location, organization}: Props) {
 
       {hasOrganization && (
         <SidebarSectionGroup>
+          <PerformanceOnboardingSidebar
+            currentPanel={activePanel}
+            onShowPanel={() => togglePanel(SidebarPanelKey.PerformanceOnboarding)}
+            hidePanel={hidePanel}
+            {...sidebarItemProps}
+          />
+          <ReplaysOnboardingSidebar
+            currentPanel={activePanel}
+            onShowPanel={() => togglePanel(SidebarPanelKey.ReplaysOnboarding)}
+            hidePanel={hidePanel}
+            {...sidebarItemProps}
+          />
+          <ProfilingOnboardingSidebar
+            currentPanel={activePanel}
+            onShowPanel={() => togglePanel(SidebarPanelKey.ReplaysOnboarding)}
+            hidePanel={hidePanel}
+            {...sidebarItemProps}
+          />
           <SidebarSection noMargin noPadding>
             <OnboardingStatus
               org={organization}
@@ -386,7 +430,7 @@ function Sidebar({location, organization}: Props) {
                 id="collapse"
                 data-test-id="sidebar-collapse"
                 {...sidebarItemProps}
-                icon={<StyledIconChevron collapsed={collapsed} />}
+                icon={<IconChevron direction={collapsed ? 'right' : 'left'} size="sm" />}
                 label={collapsed ? t('Expand') : t('Collapse')}
                 onClick={toggleCollapse}
               />
@@ -506,23 +550,6 @@ const SidebarSection = styled(SidebarSectionGroup)<{
     display: none;
   }
 `;
-
-const ExpandedIcon = css`
-  transition: 0.3s transform ease;
-  transform: rotate(270deg);
-`;
-const CollapsedIcon = css`
-  transform: rotate(90deg);
-`;
-const StyledIconChevron = styled(({collapsed, ...props}) => (
-  <IconChevron
-    direction="left"
-    size="md"
-    isCircled
-    css={[ExpandedIcon, collapsed && CollapsedIcon]}
-    {...props}
-  />
-))``;
 
 const SidebarCollapseItem = styled(SidebarItem)`
   @media (max-width: ${p => p.theme.breakpoints.medium}) {

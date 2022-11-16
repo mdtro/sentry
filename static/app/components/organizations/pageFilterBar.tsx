@@ -4,7 +4,7 @@ const PageFilterBar = styled('div')<{condensed?: boolean}>`
   display: flex;
   position: relative;
   border-radius: ${p => p.theme.borderRadius};
-  height: ${p => p.theme.form.default.height}px;
+  height: ${p => p.theme.form.md.height}px;
   ${p =>
     p.condensed &&
     `
@@ -28,7 +28,7 @@ const PageFilterBar = styled('div')<{condensed?: boolean}>`
     z-index: 0;
   }
 
-  & button[aria-haspopup='listbox'] {
+  & button[aria-haspopup] {
     height: 100%;
     min-height: auto;
     border-color: transparent !important;
@@ -41,6 +41,15 @@ const PageFilterBar = styled('div')<{condensed?: boolean}>`
     flex-grow: 1;
     flex-shrink: 1;
     flex-basis: max-content;
+
+    /* Prevent project filter from shrinking (it has in-built max character count)
+    except in mobile */
+    &:first-child {
+      flex-shrink: 0;
+      @media only screen and (max-width: ${p => p.theme.breakpoints.small}) {
+        flex-shrink: 1;
+      }
+    }
   }
 
   & > *:not(:first-child)::after {

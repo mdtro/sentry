@@ -3,7 +3,7 @@ import styled from '@emotion/styled';
 
 import {addSuccessMessage} from 'sentry/actionCreators/indicator';
 import Button from 'sentry/components/button';
-import TextCopyInput from 'sentry/components/forms/textCopyInput';
+import TextCopyInput from 'sentry/components/textCopyInput';
 
 type Props = {
   closeModal: () => void;
@@ -51,10 +51,10 @@ export function SplitInstallationIdModal(props: Props) {
         <TextCopyInput onCopy={onCopy}>{props.installationId}</TextCopyInput>
       </ItemHolder>
       <ButtonHolder>
-        <Button size="small" onClick={props.closeModal}>
+        <Button size="sm" onClick={props.closeModal}>
           Close
         </Button>
-        <Button size="small" priority="primary" onClick={handleContinue}>
+        <Button size="sm" priority="primary" onClick={handleContinue}>
           Copy and Open Link
         </Button>
       </ButtonHolder>

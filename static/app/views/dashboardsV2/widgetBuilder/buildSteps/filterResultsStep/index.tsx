@@ -1,70 +1,70 @@
-import {useCallback, useEffect, useRef} from 'react';
+import {useCallback, useState} from 'react';
 import styled from '@emotion/styled';
+import {Location} from 'history';
 
+import Feature from 'sentry/components/acl/feature';
 import Button from 'sentry/components/button';
-import Input from 'sentry/components/forms/controls/input';
+import ButtonBar from 'sentry/components/buttonBar';
+import DatePageFilter from 'sentry/components/datePageFilter';
+import EnvironmentPageFilter from 'sentry/components/environmentPageFilter';
 import Field from 'sentry/components/forms/field';
+import Input from 'sentry/components/input';
+import PageFilterBar from 'sentry/components/organizations/pageFilterBar';
+import ProjectPageFilter from 'sentry/components/projectPageFilter';
 import {IconAdd, IconDelete} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
 import {Organization, PageFilters} from 'sentry/types';
-import {WidgetQuery, WidgetType} from 'sentry/views/dashboardsV2/types';
+import {decodeList} from 'sentry/utils/queryString';
+import {ReleasesProvider} from 'sentry/utils/releases/releasesProvider';
+import {getDatasetConfig} from 'sentry/views/dashboardsV2/datasetConfig/base';
+import ReleasesSelectControl from 'sentry/views/dashboardsV2/releasesSelectControl';
+import {
+  DashboardFilterKeys,
+  DashboardFilters,
+  WidgetQuery,
+  WidgetType,
+} from 'sentry/views/dashboardsV2/types';
 
 import {BuildStep} from '../buildStep';
-
-import {EventsSearchBar} from './eventsSearchBar';
-import {IssuesSearchBar} from './issuesSearchBar';
-import {ReleaseSearchBar} from './releaseSearchBar';
 
 interface Props {
   canAddSearchConditions: boolean;
   hideLegendAlias: boolean;
+  location: Location;
   onAddSearchConditions: () => void;
   onQueryChange: (queryIndex: number, newQuery: WidgetQuery) => void;
+  onQueryConditionChange: (isQueryConditionValid: boolean) => void;
   onQueryRemove: (queryIndex: number) => void;
   organization: Organization;
   queries: WidgetQuery[];
   selection: PageFilters;
   widgetType: WidgetType;
+  dashboardFilters?: DashboardFilters;
   projectIds?: number[] | readonly number[];
   queryErrors?: Record<string, any>[];
 }
 
 export function FilterResultsStep({
   canAddSearchConditions,
+  dashboardFilters,
+  location,
   queries,
   onQueryRemove,
   onAddSearchConditions,
   onQueryChange,
   organization,
   hideLegendAlias,
-  projectIds,
   queryErrors,
   widgetType,
   selection,
+  onQueryConditionChange,
 }: Props) {
-  const blurTimeoutRef = useRef<number | undefined>(undefined);
-
-  useEffect(() => {
-    return () => {
-      window.clearTimeout(blurTimeoutRef.current);
-    };
-  }, []);
+  const [queryConditionValidity, setQueryConditionValidity] = useState<boolean[]>([]);
 
   const handleSearch = useCallback(
     (queryIndex: number) => {
       return (field: string) => {
-        // SearchBar will call handlers for both onSearch and onBlur
-        // when selecting a value from the autocomplete dropdown. This can
-        // cause state issues for the search bar in our use case. To prevent
-        // this, we set a timer in our onSearch handler to block our onBlur
-        // handler from firing if it is within 200ms, ie from clicking an
-        // autocomplete value.
-        window.clearTimeout(blurTimeoutRef.current);
-        blurTimeoutRef.current = window.setTimeout(() => {
-          blurTimeoutRef.current = undefined;
-        }, 200);
-
         const newQuery: WidgetQuery = {
           ...queries[queryIndex],
           conditions: field,
@@ -73,23 +73,33 @@ export function FilterResultsStep({
         onQueryChange(queryIndex, newQuery);
       };
     },
-    [queries]
+    [onQueryChange, queries]
   );
 
-  const handleBlur = useCallback(
+  const handleClose = useCallback(
     (queryIndex: number) => {
-      return (field: string) => {
-        if (!blurTimeoutRef.current) {
-          const newQuery: WidgetQuery = {
-            ...queries[queryIndex],
-            conditions: field,
-          };
-          onQueryChange(queryIndex, newQuery);
-        }
+      return (field: string, {validSearch}: {validSearch: boolean}) => {
+        queryConditionValidity[queryIndex] = validSearch;
+        setQueryConditionValidity(queryConditionValidity);
+        onQueryConditionChange(!queryConditionValidity.some(validity => !validity));
+        const newQuery: WidgetQuery = {
+          ...queries[queryIndex],
+          conditions: field,
+        };
+        onQueryChange(queryIndex, newQuery);
       };
     },
-    [queries]
+    [onQueryChange, onQueryConditionChange, queryConditionValidity, queries]
   );
+
+  const handleRemove = (queryIndex: number) => () => {
+    queryConditionValidity.splice(queryIndex, 1);
+    setQueryConditionValidity(queryConditionValidity);
+    onQueryConditionChange(!queryConditionValidity.some(validity => !validity));
+    onQueryRemove(queryIndex);
+  };
+
+  const datasetConfig = getDatasetConfig(widgetType);
 
   return (
     <BuildStep
@@ -97,11 +107,33 @@ export function FilterResultsStep({
       description={
         canAddSearchConditions
           ? t(
-              'This is how you filter down your search. You can add multiple queries to compare data for each overlay.'
+              'Projects, environments, and date range have been preselected at the dashboard level. Filter down your search here. You can add multiple queries to compare data for each overlay.'
             )
-          : t('This is how you filter down your search.')
+          : t(
+              'Projects, environments, and date range have been preselected at the dashboard level. Filter down your search here.'
+            )
       }
     >
+      <Feature features={['dashboards-top-level-filter']}>
+        <StyledPageFilterBar>
+          <ProjectPageFilter disabled />
+          <EnvironmentPageFilter disabled />
+          <DatePageFilter alignDropdown="left" disabled />
+        </StyledPageFilterBar>
+        <FilterButtons>
+          <ReleasesProvider organization={organization} selection={selection}>
+            <StyledReleasesSelectControl
+              selectedReleases={
+                (DashboardFilterKeys.RELEASE in location.query
+                  ? decodeList(location.query[DashboardFilterKeys.RELEASE])
+                  : dashboardFilters?.[DashboardFilterKeys.RELEASE]) ?? []
+              }
+              isDisabled
+              className="widget-release-select"
+            />
+          </ReleasesProvider>
+        </FilterButtons>
+      </Feature>
       <div>
         {queries.map((query, queryIndex) => {
           return (
@@ -113,32 +145,13 @@ export function FilterResultsStep({
               error={queryErrors?.[queryIndex]?.conditions}
             >
               <SearchConditionsWrapper>
-                {widgetType === WidgetType.ISSUE ? (
-                  <IssuesSearchBar
-                    searchSource="widget_builder"
-                    organization={organization}
-                    query={query}
-                    onBlur={handleBlur(queryIndex)}
-                    onSearch={handleSearch(queryIndex)}
-                    selection={selection}
-                  />
-                ) : widgetType === WidgetType.DISCOVER ? (
-                  <EventsSearchBar
-                    organization={organization}
-                    query={query}
-                    projectIds={projectIds}
-                    onBlur={handleBlur(queryIndex)}
-                    onSearch={handleSearch(queryIndex)}
-                  />
-                ) : (
-                  <ReleaseSearchBar
-                    orgSlug={organization.slug}
-                    query={query}
-                    projectIds={projectIds}
-                    onBlur={handleBlur(queryIndex)}
-                    onSearch={handleSearch(queryIndex)}
-                  />
-                )}
+                <datasetConfig.SearchBar
+                  organization={organization}
+                  pageFilters={selection}
+                  onClose={handleClose(queryIndex)}
+                  onSearch={handleSearch(queryIndex)}
+                  widgetQuery={query}
+                />
                 {!hideLegendAlias && (
                   <LegendAliasInput
                     type="text"
@@ -158,7 +171,7 @@ export function FilterResultsStep({
                   <Button
                     size="zero"
                     borderless
-                    onClick={() => onQueryRemove(queryIndex)}
+                    onClick={handleRemove(queryIndex)}
                     icon={<IconDelete />}
                     title={t('Remove query')}
                     aria-label={t('Remove query')}
@@ -169,11 +182,7 @@ export function FilterResultsStep({
           );
         })}
         {canAddSearchConditions && (
-          <Button
-            size="small"
-            icon={<IconAdd isCircled />}
-            onClick={onAddSearchConditions}
-          >
+          <Button size="sm" icon={<IconAdd isCircled />} onClick={onAddSearchConditions}>
             {t('Add Query')}
           </Button>
         )}
@@ -188,6 +197,26 @@ const LegendAliasInput = styled(Input)`
 
 const QueryField = styled(Field)`
   padding-bottom: ${space(1)};
+`;
+
+const StyledPageFilterBar = styled(PageFilterBar)`
+  margin-bottom: ${space(1)};
+  margin-right: ${space(2)};
+`;
+
+const FilterButtons = styled(ButtonBar)`
+  grid-template-columns: 1fr;
+
+  margin-bottom: ${space(1)};
+  margin-right: ${space(2)};
+
+  justify-content: space-between;
+`;
+
+const StyledReleasesSelectControl = styled(ReleasesSelectControl)`
+  button {
+    width: 100%;
+  }
 `;
 
 const SearchConditionsWrapper = styled('div')`

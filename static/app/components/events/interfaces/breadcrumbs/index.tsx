@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import {Fragment, useEffect, useState} from 'react';
 import styled from '@emotion/styled';
 import omit from 'lodash/omit';
 import pick from 'lodash/pick';
@@ -7,10 +7,12 @@ import GuideAnchor from 'sentry/components/assistant/guideAnchor';
 import Button from 'sentry/components/button';
 import ErrorBoundary from 'sentry/components/errorBoundary';
 import EventDataSection from 'sentry/components/events/eventDataSection';
+import EventReplay from 'sentry/components/events/eventReplay';
 import {t} from 'sentry/locale';
+import space from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
 import {BreadcrumbLevelType, Crumb, RawCrumb} from 'sentry/types/breadcrumbs';
-import {Event} from 'sentry/types/event';
+import {EntryType, Event} from 'sentry/types/event';
 import {defined} from 'sentry/utils';
 
 import SearchBarAction from '../searchBarAction';
@@ -32,7 +34,8 @@ type Props = Pick<React.ComponentProps<typeof Breadcrumbs>, 'route' | 'router'> 
   };
   event: Event;
   organization: Organization;
-  type: string;
+  projectSlug: string;
+  isShare?: boolean;
 };
 
 type State = {
@@ -45,12 +48,12 @@ type State = {
   searchTerm: string;
   relativeTime?: string;
 };
-
 function BreadcrumbsContainer({
   data,
   event,
   organization,
-  type: eventType,
+  projectSlug,
+  isShare,
   route,
   router,
 }: Props) {
@@ -106,7 +109,7 @@ function BreadcrumbsContainer({
 
     const options: FilterOptions = [];
 
-    if (!!typeOptions.length) {
+    if (typeOptions.length) {
       options.push({
         value: 'types',
         label: t('Types'),
@@ -114,7 +117,7 @@ function BreadcrumbsContainer({
       });
     }
 
-    if (!!levels.length) {
+    if (levels.length) {
       options.push({
         value: 'levels',
         label: t('Levels'),
@@ -186,9 +189,9 @@ function BreadcrumbsContainer({
     }
 
     // Slightly hacky, but it works
-    // the string is being `stringfy`d here in order to match exactly the same `stringfy`d string of the loop
+    // the string is being `stringify`d here in order to match exactly the same `stringify`d string of the loop
     const searchFor = JSON.stringify(newSearchTerm)
-      // it replaces double backslash generate by JSON.stringfy with single backslash
+      // it replaces double backslash generate by JSON.stringify with single backslash
       .replace(/((^")|("$))/g, '')
       .toLocaleLowerCase();
 
@@ -232,13 +235,13 @@ function BreadcrumbsContainer({
       );
     }
 
-    if (!![...checkedTypeOptions].length) {
+    if ([...checkedTypeOptions].length) {
       return breadcrumbs.filter(filteredCrumb =>
         checkedTypeOptions.has(filteredCrumb.type)
       );
     }
 
-    if (!![...checkedLevelOptions].length) {
+    if ([...checkedLevelOptions].length) {
       return breadcrumbs.filter(filteredCrumb =>
         checkedLevelOptions.has(filteredCrumb.level)
       );
@@ -290,7 +293,7 @@ function BreadcrumbsContainer({
   }
 
   function getEmptyMessage() {
-    if (!!filteredBySearch.length) {
+    if (filteredBySearch.length) {
       return {};
     }
 
@@ -316,40 +319,56 @@ function BreadcrumbsContainer({
     };
   }
 
+  const replayId = event?.tags?.find(({key}) => key === 'replayId')?.value;
+  const showReplay =
+    !isShare && Boolean(replayId) && organization.features.includes('session-replay-ui');
+
+  const searchBar = (
+    <StyledSearchBarAction
+      placeholder={t('Search breadcrumbs')}
+      onChange={handleSearch}
+      query={searchTerm}
+      filterOptions={filterOptions}
+      filterSelections={state.filterSelections}
+      onFilterChange={handleFilter}
+      isFullWidth={showReplay}
+    />
+  );
+
   return (
     <EventDataSection
-      type={eventType}
-      title={
-        <GuideAnchor target="breadcrumbs" position="right">
-          <h3>{t('Breadcrumbs')}</h3>
-        </GuideAnchor>
-      }
-      actions={
-        <StyledSearchBarAction
-          placeholder={t('Search breadcrumbs')}
-          onChange={handleSearch}
-          query={searchTerm}
-          filterOptions={filterOptions}
-          filterSelections={state.filterSelections}
-          onFilterChange={handleFilter}
-        />
-      }
+      type={EntryType.BREADCRUMBS}
+      title={<h3>{t('Breadcrumbs')}</h3>}
+      actions={!showReplay ? searchBar : null}
       wrapTitle={false}
       isCentered
     >
+      {showReplay ? (
+        <Fragment>
+          <EventReplay
+            replayId={replayId!}
+            projectSlug={projectSlug}
+            orgSlug={organization.slug}
+            event={event}
+          />
+          {searchBar}
+        </Fragment>
+      ) : null}
       <ErrorBoundary>
-        <Breadcrumbs
-          router={router}
-          route={route}
-          emptyMessage={getEmptyMessage()}
-          breadcrumbs={filteredBySearch}
-          event={event}
-          organization={organization}
-          onSwitchTimeFormat={handleSwitchTimeFormat}
-          displayRelativeTime={displayRelativeTime}
-          searchTerm={searchTerm}
-          relativeTime={relativeTime!} // relativeTime has to be always available, as the last item timestamp is the event created time
-        />
+        <GuideAnchor target="breadcrumbs" position="bottom">
+          <Breadcrumbs
+            router={router}
+            route={route}
+            emptyMessage={getEmptyMessage()}
+            breadcrumbs={filteredBySearch}
+            event={event}
+            organization={organization}
+            onSwitchTimeFormat={handleSwitchTimeFormat}
+            displayRelativeTime={displayRelativeTime}
+            searchTerm={searchTerm}
+            relativeTime={relativeTime!} // relativeTime has to be always available, as the last item timestamp is the event created time
+          />
+        </GuideAnchor>
       </ErrorBoundary>
     </EventDataSection>
   );
@@ -357,8 +376,10 @@ function BreadcrumbsContainer({
 
 export default BreadcrumbsContainer;
 
-const StyledSearchBarAction = styled(SearchBarAction)`
+const StyledSearchBarAction = styled(SearchBarAction)<{isFullWidth?: boolean}>`
   z-index: 2;
+  ${p => (p.isFullWidth ? 'width: 100% !important' : '')};
+  margin-bottom: ${p => (p.isFullWidth ? space(1) : 0)};
 `;
 
 const LevelWrap = styled('span')`

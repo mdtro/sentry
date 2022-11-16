@@ -17,7 +17,7 @@ import {IconFire} from 'sentry/icons';
 import {t, tct, tn} from 'sentry/locale';
 import {OrganizationSummary} from 'sentry/types';
 import {Event} from 'sentry/types/event';
-import {trackAnalyticsEvent} from 'sentry/utils/analytics';
+import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
 import {getDocsPlatform} from 'sentry/utils/docs';
 import {getDuration} from 'sentry/utils/formatters';
 import localStorage from 'sentry/utils/localStorage';
@@ -242,10 +242,8 @@ export default function QuickTrace({
 }
 
 function handleNode(key: string, organization: OrganizationSummary) {
-  trackAnalyticsEvent({
-    eventKey: 'quick_trace.node.clicked',
-    eventName: 'Quick Trace: Node clicked',
-    organization_id: parseInt(organization.id, 10),
+  trackAdvancedAnalyticsEvent('quick_trace.node.clicked', {
+    organization: organization.id,
     node_key: key,
   });
 }
@@ -255,10 +253,11 @@ function handleDropdownItem(
   organization: OrganizationSummary,
   extra: boolean
 ) {
-  trackAnalyticsEvent({
-    eventKey: 'quick_trace.dropdown.clicked' + (extra ? '_extra' : ''),
-    eventName: 'Quick Trace: Dropdown clicked',
-    organization_id: parseInt(organization.id, 10),
+  const eventKey = extra
+    ? 'quick_trace.dropdown.clicked_extra'
+    : 'quick_trace.dropdown.clicked';
+  trackAdvancedAnalyticsEvent(eventKey, {
+    organization: organization.id,
     node_key: key,
   });
 }
@@ -309,7 +308,11 @@ function EventNodeSelector({
   errors = errors.filter(error => error.event_id !== currentEvent.id);
 
   if (events.length + errors.length === 0) {
-    return <EventNode type={type}>{text}</EventNode>;
+    return (
+      <EventNode type={type} data-test-id="event-node">
+        {text}
+      </EventNode>
+    );
   }
   if (events.length + errors.length === 1) {
     /**
@@ -336,7 +339,6 @@ function EventNodeSelector({
         to={target}
         onClick={() => handleNode(nodeKey, organization)}
         type={type}
-        shouldOffset={hasErrors}
       />
     );
   }
@@ -357,14 +359,7 @@ function EventNodeSelector({
     <DropdownContainer>
       <DropdownLink
         caret={false}
-        title={
-          <StyledEventNode
-            text={text}
-            hoverText={hoverText}
-            type={type}
-            shouldOffset={hasErrors}
-          />
-        }
+        title={<StyledEventNode text={text} hoverText={hoverText} type={type} />}
         anchorRight={anchor === 'right'}
       >
         {errors.length > 0 && (
@@ -496,27 +491,19 @@ type EventNodeProps = {
   hoverText: React.ReactNode;
   text: React.ReactNode;
   onClick?: (eventKey: any) => void;
-  shouldOffset?: boolean;
   to?: LocationDescriptor;
   type?: keyof Theme['tag'];
 };
 
-function StyledEventNode({
-  text,
-  hoverText,
-  to,
-  onClick,
-  type = 'white',
-  shouldOffset = false,
-}: EventNodeProps) {
+function StyledEventNode({text, hoverText, to, onClick, type = 'white'}: EventNodeProps) {
   return (
     <Tooltip position="top" containerDisplayMode="inline-flex" title={hoverText}>
       <EventNode
+        data-test-id="event-node"
         type={type}
         icon={null}
         to={to}
         onClick={onClick}
-        shouldOffset={shouldOffset}
       >
         {text}
       </EventNode>
@@ -559,20 +546,16 @@ class MissingServiceNode extends Component<MissingServiceProps, MissingServiceSt
       (now + HIDE_MISSING_EXPIRES).toString()
     );
     this.setState({hideMissing: true});
-    trackAnalyticsEvent({
-      eventKey: 'quick_trace.missing_service.dismiss',
-      eventName: 'Quick Trace: Missing Service Dismissed',
-      organization_id: parseInt(organization.id, 10),
+    trackAdvancedAnalyticsEvent('quick_trace.missing_service.dismiss', {
+      organization: organization.id,
       platform,
     });
   };
 
   trackExternalLink = () => {
     const {organization, platform} = this.props;
-    trackAnalyticsEvent({
-      eventKey: 'quick_trace.missing_service.docs',
-      eventName: 'Quick Trace: Missing Service Clicked',
-      organization_id: parseInt(organization.id, 10),
+    trackAdvancedAnalyticsEvent('quick_trace.missing_service.docs', {
+      organization: organization.id,
       platform,
     });
   };
@@ -588,7 +571,7 @@ class MissingServiceNode extends Component<MissingServiceProps, MissingServiceSt
     const docsHref =
       docPlatform === null || docPlatform === 'javascript'
         ? 'https://docs.sentry.io/platforms/javascript/performance/connect-services/'
-        : `https://docs.sentry.io/platforms/${docPlatform}/performance/connecting-services`;
+        : `https://docs.sentry.io/platforms/${docPlatform}/performance/connect-services`;
     return (
       <Fragment>
         {connectorSide === 'left' && <TraceConnector />}

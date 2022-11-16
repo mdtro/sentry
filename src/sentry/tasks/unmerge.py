@@ -1,12 +1,11 @@
 import logging
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from functools import reduce
 from typing import Any, Mapping, Optional, Tuple
 
 from django.db import transaction
 
-from sentry import eventstore, similarity
-from sentry.app import tsdb
+from sentry import eventstore, similarity, tsdb
 from sentry.constants import DEFAULT_LOGGER_NAME, LOG_LEVELS_MAP
 from sentry.event_manager import generate_culprit
 from sentry.models import (
@@ -252,7 +251,7 @@ def truncate_denormalizations(project, group):
 
     # XXX: This can cause a race condition with the ``FirstSeenEventCondition``
     # where notifications can be erroneously sent if they occur in this group
-    # before the reprocessing of the denormalizated data completes, since a new
+    # before the reprocessing of the denormalized data completes, since a new
     # ``GroupEnvironment`` will be created.
     for instance in GroupEnvironment.objects.filter(group_id=group.id):
         instance.delete()
@@ -280,7 +279,7 @@ def collect_group_environment_data(events):
     Find the first release for a each group and environment pair from a
     date-descending sorted list of events.
     """
-    results = OrderedDict()
+    results = {}
     for event in events:
         results[(event.group_id, get_environment_name(event))] = event.get_tag("sentry:release")
     return results
@@ -301,7 +300,7 @@ def repair_group_environment_data(caches, project, events):
 
 
 def collect_tag_data(events):
-    results = OrderedDict()
+    results = {}
 
     for event in events:
         environment = get_environment_name(event)
@@ -324,7 +323,7 @@ def get_environment_name(event):
 
 
 def collect_release_data(caches, project, events):
-    results = OrderedDict()
+    results = {}
 
     for event in events:
         release = event.get_tag("sentry:release")

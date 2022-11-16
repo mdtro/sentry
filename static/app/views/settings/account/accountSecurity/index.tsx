@@ -5,6 +5,7 @@ import {addErrorMessage} from 'sentry/actionCreators/indicator';
 import {openEmailVerification} from 'sentry/actionCreators/modal';
 import Button from 'sentry/components/button';
 import CircleIndicator from 'sentry/components/circleIndicator';
+import EmptyMessage from 'sentry/components/emptyMessage';
 import Field from 'sentry/components/forms/field';
 import ListLink from 'sentry/components/links/listLink';
 import NavTabs from 'sentry/components/navTabs';
@@ -19,7 +20,6 @@ import AsyncView from 'sentry/views/asyncView';
 import RemoveConfirm from 'sentry/views/settings/account/accountSecurity/components/removeConfirm';
 import TwoFactorRequired from 'sentry/views/settings/account/accountSecurity/components/twoFactorRequired';
 import PasswordForm from 'sentry/views/settings/account/passwordForm';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
 import SettingsPageHeader from 'sentry/views/settings/components/settingsPageHeader';
 import TextBlock from 'sentry/views/settings/components/text/textBlock';
 
@@ -82,6 +82,7 @@ class AccountSecurity extends AsyncView<Props> {
     const {authenticators, countEnrolled, deleteDisabled, onDisable, hasVerifiedEmail} =
       this.props;
     const isEmpty = !authenticators?.length;
+
     return (
       <div>
         <SettingsPageHeader
@@ -113,7 +114,7 @@ class AccountSecurity extends AsyncView<Props> {
                 'Signing out of all devices will sign you out of this device as well.'
               )}
             >
-              <Button data-test-id="signoutAll" onClick={this.handleSessionClose}>
+              <Button onClick={this.handleSessionClose}>
                 {t('Sign out of all devices')}
               </Button>
             </Field>
@@ -136,14 +137,26 @@ class AccountSecurity extends AsyncView<Props> {
                   description,
                   isBackupInterface,
                   isEnrolled,
+                  disallowNewEnrollment,
                   configureButton,
                   name,
                 } = auth;
+                if (disallowNewEnrollment && !isEnrolled) {
+                  return null;
+                }
                 return (
                   <AuthenticatorPanelItem key={id}>
                     <AuthenticatorHeader>
                       <AuthenticatorTitle>
-                        <AuthenticatorStatus enabled={isEnrolled} />
+                        <AuthenticatorStatus
+                          role="status"
+                          aria-label={
+                            isEnrolled
+                              ? t('Authentication Method Active')
+                              : t('Authentication Method Inactive')
+                          }
+                          enabled={isEnrolled}
+                        />
                         <AuthenticatorName>{name}</AuthenticatorName>
                       </AuthenticatorTitle>
 
@@ -151,9 +164,8 @@ class AccountSecurity extends AsyncView<Props> {
                         {!isBackupInterface && !isEnrolled && hasVerifiedEmail && (
                           <Button
                             to={`/settings/account/security/mfa/${id}/enroll/`}
-                            size="small"
+                            size="sm"
                             priority="primary"
-                            className="enroll-button"
                           >
                             {t('Add')}
                           </Button>
@@ -161,9 +173,8 @@ class AccountSecurity extends AsyncView<Props> {
                         {!isBackupInterface && !isEnrolled && !hasVerifiedEmail && (
                           <Button
                             onClick={this.handleAdd2FAClicked}
-                            size="small"
+                            size="sm"
                             priority="primary"
-                            className="enroll-button"
                           >
                             {t('Add')}
                           </Button>
@@ -172,8 +183,7 @@ class AccountSecurity extends AsyncView<Props> {
                         {isEnrolled && authId && (
                           <Button
                             to={`/settings/account/security/mfa/${authId}/`}
-                            size="small"
-                            className="details-button"
+                            size="sm"
                           >
                             {configureButton}
                           </Button>
@@ -182,7 +192,8 @@ class AccountSecurity extends AsyncView<Props> {
                         {!isBackupInterface && isEnrolled && (
                           <Tooltip
                             title={t(
-                              `Two-factor authentication is required for organization(s): ${this.formatOrgSlugs()}.`
+                              `Two-factor authentication is required for organization(s): %s.`,
+                              this.formatOrgSlugs()
                             )}
                             disabled={!deleteDisabled}
                           >
@@ -191,8 +202,8 @@ class AccountSecurity extends AsyncView<Props> {
                               disabled={deleteDisabled}
                             >
                               <Button
-                                size="small"
-                                aria-label={t('delete')}
+                                size="sm"
+                                aria-label={t('Delete')}
                                 icon={<IconDelete />}
                               />
                             </RemoveConfirm>

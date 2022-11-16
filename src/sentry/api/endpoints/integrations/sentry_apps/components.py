@@ -2,6 +2,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.serializers import ValidationError
 
+from sentry.api.base import pending_silo_endpoint, region_silo_endpoint
 from sentry.api.bases import (
     OrganizationEndpoint,
     SentryAppBaseEndpoint,
@@ -17,16 +18,18 @@ from sentry.models import Project, SentryAppComponent, SentryAppInstallation
 # TODO(mgaeta): These endpoints are doing the same thing, but one takes a
 #  project and the other takes a sentry app. It would be better to have a single
 #  endpoint that can take project_id or sentry_app_id as a query parameter.
+@pending_silo_endpoint
 class SentryAppComponentsEndpoint(SentryAppBaseEndpoint):
     def get(self, request: Request, sentry_app) -> Response:
         return self.paginate(
             request=request,
             queryset=sentry_app.components.all(),
             paginator_cls=OffsetPaginator,
-            on_results=lambda x: serialize(x, request.user),
+            on_results=lambda x: serialize(x, request.user, errors=[]),
         )
 
 
+@region_silo_endpoint
 class OrganizationSentryAppComponentsEndpoint(OrganizationEndpoint):
     @add_integration_platform_metric_tag
     def get(self, request: Request, organization) -> Response:
@@ -40,6 +43,7 @@ class OrganizationSentryAppComponentsEndpoint(OrganizationEndpoint):
             return Response([], status=404)
 
         components = []
+        errors = []
 
         for install in SentryAppInstallation.objects.get_installed_for_organization(
             organization.id
@@ -54,13 +58,14 @@ class OrganizationSentryAppComponentsEndpoint(OrganizationEndpoint):
                     sentry_app_components.Preparer.run(
                         component=component, install=install, project=project
                     )
-                    components.append(component)
                 except APIError:
-                    continue
+                    errors.append(str(component.uuid))
+
+                components.append(component)
 
         return self.paginate(
             request=request,
             queryset=components,
             paginator_cls=OffsetPaginator,
-            on_results=lambda x: serialize(x, request.user),
+            on_results=lambda x: serialize(x, request.user, errors=errors),
         )

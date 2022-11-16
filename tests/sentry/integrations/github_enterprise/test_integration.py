@@ -98,7 +98,6 @@ class GitHubEnterpriseIntegrationTest(IntegrationTestCase):
             responses.GET,
             self.base_url + "/user/installations",
             json={"installations": [{"id": installation_id}]},
-            match_querystring=True,
         )
 
         resp = self.client.get(
@@ -180,7 +179,7 @@ class GitHubEnterpriseIntegrationTest(IntegrationTestCase):
             },
         )
         integration = Integration.objects.get(provider=self.provider.key)
-        installation = integration.get_installation(self.organization)
+        installation = integration.get_installation(self.organization.id)
         result = installation.get_repositories("ex")
         assert result == [
             {"identifier": "test/example", "name": "example"},

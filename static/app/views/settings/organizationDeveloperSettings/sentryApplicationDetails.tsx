@@ -14,13 +14,14 @@ import Avatar from 'sentry/components/avatar';
 import AvatarChooser, {Model} from 'sentry/components/avatarChooser';
 import Button from 'sentry/components/button';
 import DateTime from 'sentry/components/dateTime';
+import EmptyMessage from 'sentry/components/emptyMessage';
 import Form from 'sentry/components/forms/form';
 import FormField from 'sentry/components/forms/formField';
 import JsonForm from 'sentry/components/forms/jsonForm';
 import FormModel, {FieldValue} from 'sentry/components/forms/model';
-import TextCopyInput from 'sentry/components/forms/textCopyInput';
 import ExternalLink from 'sentry/components/links/externalLink';
 import {Panel, PanelBody, PanelHeader, PanelItem} from 'sentry/components/panels';
+import TextCopyInput from 'sentry/components/textCopyInput';
 import Tooltip from 'sentry/components/tooltip';
 import {SENTRY_APP_PERMISSIONS} from 'sentry/constants';
 import {
@@ -33,7 +34,6 @@ import space from 'sentry/styles/space';
 import {InternalAppApiToken, Scope, SentryApp} from 'sentry/types';
 import getDynamicText from 'sentry/utils/getDynamicText';
 import AsyncView from 'sentry/views/asyncView';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
 import SettingsPageHeader from 'sentry/views/settings/components/settingsPageHeader';
 import PermissionsObserver from 'sentry/views/settings/organizationDeveloperSettings/permissionsObserver';
 
@@ -268,7 +268,7 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
                 'You do not have access to view these credentials because the permissions for this integration exceed those of your role.'
               )}
             >
-              <TextCopyInput>
+              <TextCopyInput aria-label={t('Token value')}>
                 {getDynamicText({value: token.token, fixed: 'xxxxxx'})}
               </TextCopyInput>
             </Tooltip>
@@ -284,7 +284,7 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
           </CreatedDate>
           <Button
             onClick={this.onRemoveToken.bind(this, token)}
-            size="small"
+            size="sm"
             icon={<IconDelete />}
             data-test-id="token-delete"
             type="button"
@@ -441,7 +441,7 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
               <PanelHeader hasButtons>
                 {t('Tokens')}
                 <Button
-                  size="xsmall"
+                  size="xs"
                   icon={<IconAdd size="xs" isCircled />}
                   onClick={evt => this.onAddToken(evt)}
                   data-test-id="token-add"
@@ -460,15 +460,15 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
               <PanelBody>
                 {app.status !== 'internal' && (
                   <FormField name="clientId" label="Client ID">
-                    {({value}) => (
-                      <TextCopyInput>
+                    {({value, id}) => (
+                      <TextCopyInput id={id}>
                         {getDynamicText({value, fixed: 'CI_CLIENT_ID'})}
                       </TextCopyInput>
                     )}
                   </FormField>
                 )}
                 <FormField name="clientSecret" label="Client Secret">
-                  {({value}) =>
+                  {({value, id}) =>
                     value ? (
                       <Tooltip
                         disabled={this.showAuthInfo}
@@ -478,7 +478,7 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
                           'You do not have access to view these credentials because the permissions for this integration exceed those of your role.'
                         )}
                       >
-                        <TextCopyInput>
+                        <TextCopyInput id={id}>
                           {getDynamicText({value, fixed: 'CI_CLIENT_SECRET'})}
                         </TextCopyInput>
                       </Tooltip>

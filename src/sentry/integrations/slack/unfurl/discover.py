@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import html
 import re
 from datetime import timedelta
-from typing import Any, List, Mapping, Optional
+from typing import Any, Mapping
 from urllib.parse import urlparse
 
 from django.http.request import HttpRequest, QueryDict
@@ -15,7 +17,12 @@ from sentry.integrations.slack.message_builder.discover import SlackDiscoverMess
 from sentry.models import ApiKey, Integration
 from sentry.models.user import User
 from sentry.search.events.filter import to_list
-from sentry.utils.dates import parse_stats_period
+from sentry.utils.dates import (
+    get_interval_from_range,
+    parse_stats_period,
+    parse_timestamp,
+    validate_interval,
+)
 
 from ..utils import logger
 from . import Handler, UnfurlableUrl, UnfurledUrl
@@ -29,6 +36,7 @@ display_modes: Mapping[str, ChartType] = {
     "dailytop5": ChartType.SLACK_DISCOVER_TOP5_DAILY,
     "previous": ChartType.SLACK_DISCOVER_PREVIOUS_PERIOD,
     "worldmap": ChartType.SLACK_DISCOVER_WORLDMAP,
+    "bar": ChartType.SLACK_DISCOVER_TOTAL_DAILY,
 }
 
 # All `multiPlotType: line` fields in /static/app/utils/discover/fields.tsx
@@ -55,6 +63,10 @@ DEFAULT_PERIOD = "14d"
 DEFAULT_AXIS_OPTION = "count()"
 AGGREGATE_PATTERN = r"^(\w+)\((.*)?\)$"
 AGGREGATE_BASE = r"(\w+)\((.*)?\)"
+
+
+class IntervalException(Exception):
+    pass
 
 
 def get_double_period(period: str) -> str:
@@ -90,8 +102,8 @@ def is_aggregate(field: str) -> bool:
 def unfurl_discover(
     data: HttpRequest,
     integration: Integration,
-    links: List[UnfurlableUrl],
-    user: Optional["User"],
+    links: list[UnfurlableUrl],
+    user: User | None,
 ) -> UnfurledUrl:
     orgs_by_slug = {org.slug: org for org in integration.organizations.all()}
     unfurls = {}
@@ -157,9 +169,6 @@ def unfurl_discover(
 
         display_mode = str(params.get("display") or saved_query.get("display", "default"))
 
-        if "daily" in display_mode:
-            params.setlist("interval", ["1d"])
-
         if "top5" in display_mode:
             params.setlist(
                 "topEvents",
@@ -169,11 +178,44 @@ def unfurl_discover(
             y_axis = params.getlist("yAxis")[0]
             if display_mode != "dailytop5":
                 display_mode = get_top5_display_mode(y_axis)
-
+            top_events = params.getlist("topEvents")[0]
         else:
             # topEvents param persists in the URL in some cases, we want to discard
             # it if it's not a top n display type.
             params.pop("topEvents", None)
+            top_events = 0
+
+        if "daily" in display_mode:
+            params.setlist("interval", ["1d"])
+        else:
+            interval = saved_query.get("interval")
+            validated_interval = None
+            delta = timedelta(days=90)
+            if "statsPeriod" in params:
+                if (parsed_period := parse_stats_period(params["statsPeriod"])) is not None:
+                    delta = parsed_period
+            elif "start" in params and "end" in params:
+                start, end = parse_timestamp(params["start"]), parse_timestamp(params["end"])
+                if start is not None and end is not None:
+                    delta = end - start
+            if interval:
+                try:
+                    if (parsed_interval := parse_stats_period(interval)) is not None:
+                        validate_interval(
+                            parsed_interval,
+                            IntervalException("Invalid interval"),
+                            delta,
+                            top_events,
+                        )
+                        validated_interval = interval
+                except IntervalException:
+                    pass
+            if validated_interval is None:
+                if delta:
+                    validated_interval = get_interval_from_range(delta, False)
+                else:
+                    validated_interval = "1h"
+            params.setlist("interval", [validated_interval])
 
         if "previous" in display_mode:
             stats_period = params.getlist("statsPeriod", [DEFAULT_PERIOD])[0]
@@ -232,7 +274,7 @@ def unfurl_discover(
     return unfurls
 
 
-def map_discover_query_args(url: str, args: Mapping[str, str]) -> Mapping[str, Any]:
+def map_discover_query_args(url: str, args: Mapping[str, str | None]) -> Mapping[str, Any]:
     """
     Extracts discover arguments from the discover link's query string
     """
@@ -250,6 +292,8 @@ def map_discover_query_args(url: str, args: Mapping[str, str]) -> Mapping[str, A
 
 handler: Handler = Handler(
     fn=unfurl_discover,
-    matcher=re.compile(r"^https?\://[^/]+/organizations/(?P<org_slug>[^/]+)/discover/results"),
+    matcher=re.compile(
+        r"^https?\://[^/]+/organizations/(?P<org_slug>[^/]+)/discover/(results|homepage)"
+    ),
     arg_mapper=map_discover_query_args,
 )

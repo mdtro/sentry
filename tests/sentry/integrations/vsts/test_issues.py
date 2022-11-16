@@ -4,6 +4,7 @@ import pytest
 import responses
 from django.test import RequestFactory
 from exam import fixture
+from responses.matchers import query_string_matcher
 
 from fixtures.vsts import (
     GET_PROJECTS_RESPONSE,
@@ -23,6 +24,7 @@ from sentry.models import (
 from sentry.shared_integrations.exceptions import IntegrationError
 from sentry.testutils import TestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
 from sentry.utils import json
 
 
@@ -112,6 +114,7 @@ class VstsIssueBase(TestCase):
         )
 
 
+@region_silo_test
 class VstsIssueSyncTest(VstsIssueBase):
     def tearDown(self):
         responses.reset()
@@ -230,14 +233,13 @@ class VstsIssueSyncTest(VstsIssueBase):
                 ]
             },
             headers={"X-MS-ContinuationToken": "continuation-token"},
-            match_querystring=True,
         )
         responses.add(
             responses.GET,
-            "https://fabrikam-fiber-inc.vssps.visualstudio.com/_apis/graph/users?continuationToken=continuation-token",
+            "https://fabrikam-fiber-inc.vssps.visualstudio.com/_apis/graph/users",
+            match=[query_string_matcher("continuationToken=continuation-token")],
             body=GET_USERS_RESPONSE,
             content_type="application/json",
-            match_querystring=True,
         )
 
         user = self.create_user("ftotten@vscsi.us")
@@ -405,6 +407,7 @@ class VstsIssueSyncTest(VstsIssueBase):
         )
 
 
+@region_silo_test
 class VstsIssueFormTest(VstsIssueBase):
     def setUp(self):
         super().setUp()

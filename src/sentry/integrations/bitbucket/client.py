@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import datetime
+from typing import Any
 from urllib.parse import urlparse
 
 from sentry.integrations.client import ApiClient
@@ -26,6 +29,7 @@ class BitbucketAPIPath:
 
     repository = "/2.0/repositories/{repo}"
     repositories = "/2.0/repositories/{username}"
+    repository_commit = "/2.0/repositories/{repo}/commit/{sha}"
     repository_commits = "/2.0/repositories/{repo}/commits/{revision}"
     repository_diff = "/2.0/repositories/{repo}/diff/{spec}"
     repository_hook = "/2.0/repositories/{repo}/hooks/{uid}"
@@ -69,7 +73,7 @@ class BitbucketApiClient(ApiClient):
     def create_issue(self, repo, data):
         return self.post(path=BitbucketAPIPath.issues.format(repo=repo), data=data)
 
-    def search_issues(self, repo, query):
+    def search_issues(self, repo: str, query: str) -> dict[str, Any]:
         # Query filters can be found here:
         # https://developer.atlassian.com/bitbucket/api/2/reference/meta/filtering#supp-endpoints
         return self.get(path=BitbucketAPIPath.issues.format(repo=repo), params={"q": query})

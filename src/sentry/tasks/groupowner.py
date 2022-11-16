@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from django.utils import timezone
 
-from sentry.app import locks
+from sentry.locks import locks
 from sentry.models import Commit, Project, Release
 from sentry.models.groupowner import GroupOwner, GroupOwnerType
 from sentry.tasks.base import instrumented_task
@@ -114,7 +114,9 @@ def _process_suspect_commits(
 def process_suspect_commits(
     event_id, event_platform, event_frames, group_id, project_id, sdk_name=None, **kwargs
 ):
-    lock = locks.get(f"process-suspect-commits:{group_id}", duration=10)
+    lock = locks.get(
+        f"process-suspect-commits:{group_id}", duration=10, name="process_suspect_commits"
+    )
     try:
         with lock.acquire():
             _process_suspect_commits(

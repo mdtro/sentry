@@ -28,7 +28,7 @@ def create_audit_entry_from_user(
     # Only create a real AuditLogEntry record if we are passing an event type
     # otherwise, we want to still log to our actual logging
     if entry.event is not None:
-        entry.save()
+        entry.save_or_write_to_kafka()
 
     if entry.event == audit_log.get_event_id("ORG_REMOVE"):
         create_org_delete_log(entry)
@@ -120,3 +120,32 @@ def complete_delete_log(delete_log, entry):
     delete_log.actor_key = entry.actor_key
     delete_log.ip_address = entry.ip_address
     delete_log.save()
+
+
+def create_system_audit_entry(transaction_id=None, logger=None, **kwargs):
+    """
+    Creates an audit log entry for events that are triggered by Sentry's
+    systems and do not have an associated Sentry user as the "actor".
+    """
+    entry = AuditLogEntry(actor_label="Sentry", **kwargs)
+    if entry.event is not None:
+        entry.save_or_write_to_kafka()
+
+    extra = {
+        "organization_id": entry.organization_id,
+        "object_id": entry.target_object,
+        "entry_id": entry.id,
+        "actor_label": entry.actor_label,
+    }
+    if transaction_id is not None:
+        extra["transaction_id"] = transaction_id
+
+    if logger:
+        # Only use the api_name for the logger message when the entry
+        # is a real AuditLogEntry record
+        if entry.event is not None:
+            logger.info(audit_log.get(entry.event).api_name, extra=extra)
+        else:
+            logger.info(entry, extra=extra)
+
+    return entry

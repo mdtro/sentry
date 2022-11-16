@@ -1,7 +1,11 @@
+import {duration} from 'moment';
+
 import type {Crumb} from 'sentry/types/breadcrumbs';
-import type {Event, EventTransaction} from 'sentry/types/event';
 import {
   breadcrumbFactory,
+  getBreadcrumbsByCategory,
+  isMemorySpan,
+  isNetworkSpan,
   replayTimestamps,
   rrwebEventListFactory,
   spansFactory,
@@ -11,6 +15,7 @@ import type {
   RecordingEvent,
   ReplayCrumb,
   ReplayError,
+  ReplayRecord,
   ReplaySpan,
 } from 'sentry/views/replays/types';
 
@@ -21,7 +26,7 @@ interface ReplayReaderParams {
   /**
    * The root Replay event, created at the start of the browser session.
    */
-  event: Event | undefined;
+  replayRecord: ReplayRecord | undefined;
 
   /**
    * The captured data from rrweb.
@@ -37,56 +42,69 @@ type RequiredNotNull<T> = {
 };
 
 export default class ReplayReader {
-  static factory({breadcrumbs, event, errors, rrwebEvents, spans}: ReplayReaderParams) {
-    if (!breadcrumbs || !event || !rrwebEvents || !spans || !errors) {
+  static factory({
+    breadcrumbs,
+    replayRecord,
+    errors,
+    rrwebEvents,
+    spans,
+  }: ReplayReaderParams) {
+    if (!breadcrumbs || !replayRecord || !rrwebEvents || !spans || !errors) {
       return null;
     }
 
-    return new ReplayReader({breadcrumbs, event, errors, rrwebEvents, spans});
+    return new ReplayReader({breadcrumbs, replayRecord, errors, rrwebEvents, spans});
   }
 
   private constructor({
     breadcrumbs,
-    event,
+    replayRecord,
     errors,
     rrwebEvents,
     spans,
   }: RequiredNotNull<ReplayReaderParams>) {
-    const {startTimestampMS, endTimestampMS} = replayTimestamps(
+    // TODO(replays): We should get correct timestamps from the backend instead
+    // of having to fix them up here.
+    const {startTimestampMs, endTimestampMs} = replayTimestamps(
+      replayRecord,
       rrwebEvents,
       breadcrumbs,
       spans
     );
-
-    this.spans = spansFactory(spans);
-    this.breadcrumbs = breadcrumbFactory(
-      startTimestampMS,
-      event,
-      errors,
-      breadcrumbs,
-      this.spans
+    replayRecord.startedAt = new Date(startTimestampMs);
+    replayRecord.finishedAt = new Date(endTimestampMs);
+    replayRecord.duration = duration(
+      replayRecord.finishedAt.getTime() - replayRecord.startedAt.getTime()
     );
 
-    this.rrwebEvents = rrwebEventListFactory(
-      startTimestampMS,
-      endTimestampMS,
-      rrwebEvents
-    );
+    const sortedSpans = spansFactory(spans);
+    this.networkSpans = sortedSpans.filter(isNetworkSpan);
+    this.memorySpans = sortedSpans.filter(isMemorySpan);
 
-    this.event = {
-      ...event,
-      startTimestamp: startTimestampMS / 1000,
-      endTimestamp: endTimestampMS / 1000,
-    } as EventTransaction;
+    this.breadcrumbs = breadcrumbFactory(replayRecord, errors, breadcrumbs, sortedSpans);
+    this.consoleCrumbs = getBreadcrumbsByCategory(this.breadcrumbs, ['console', 'issue']);
+
+    this.rrwebEvents = rrwebEventListFactory(replayRecord, rrwebEvents);
+
+    this.replayRecord = replayRecord;
   }
 
-  private event: EventTransaction;
+  private replayRecord: ReplayRecord;
   private rrwebEvents: RecordingEvent[];
   private breadcrumbs: Crumb[];
-  private spans: ReplaySpan[];
+  private consoleCrumbs: ReturnType<typeof getBreadcrumbsByCategory>;
+  private networkSpans: ReplaySpan[];
+  private memorySpans: MemorySpanType[];
 
-  getEvent = () => {
-    return this.event;
+  /**
+   * @returns Duration of Replay (milliseonds)
+   */
+  getDurationMs = () => {
+    return this.replayRecord.duration.asMilliseconds();
+  };
+
+  getReplay = () => {
+    return this.replayRecord;
   };
 
   getRRWebEvents = () => {
@@ -97,15 +115,15 @@ export default class ReplayReader {
     return this.breadcrumbs;
   };
 
-  getRawSpans = () => {
-    return this.spans;
+  getConsoleCrumbs = () => {
+    return this.consoleCrumbs;
   };
 
-  isMemorySpan = (span: ReplaySpan): span is MemorySpanType => {
-    return span.op === 'memory';
+  getNetworkSpans = () => {
+    return this.networkSpans;
   };
 
-  isNotMemorySpan = (span: ReplaySpan) => {
-    return !this.isMemorySpan(span);
+  getMemorySpans = () => {
+    return this.memorySpans;
   };
 }

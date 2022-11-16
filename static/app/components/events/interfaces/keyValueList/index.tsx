@@ -22,6 +22,7 @@ function KeyValueList({
   raw = false,
   longKeys = false,
   onClick,
+  ...props
 }: Props) {
   if (!defined(data) || data.length === 0) {
     return null;
@@ -30,7 +31,7 @@ function KeyValueList({
   const keyValueData = isSorted ? sortBy(data, [({key}) => key.toLowerCase()]) : data;
 
   return (
-    <table className="table key-value" onClick={onClick}>
+    <Table className="table key-value" onClick={onClick} {...props}>
       <tbody>
         {keyValueData.map(
           ({
@@ -41,40 +42,39 @@ function KeyValueList({
             subjectIcon,
             subjectDataTestId,
             actionButton,
+            isContextData: valueIsContextData,
           }) => {
+            const valueProps = {
+              isContextData: valueIsContextData || isContextData,
+              meta,
+              subjectIcon,
+              value,
+              raw,
+            };
+
             return (
               <tr key={`${key}.${value}`}>
                 <TableSubject className="key" wide={longKeys}>
                   {subject}
                 </TableSubject>
                 <td className="val" data-test-id={subjectDataTestId}>
-                  {actionButton ? (
-                    <ValueWithButtonContainer>
-                      <Value
-                        isContextData={isContextData}
-                        meta={meta}
-                        subjectIcon={subjectIcon}
-                        value={value}
-                        raw={raw}
-                      />
-                      <ActionButtonWrapper>{actionButton}</ActionButtonWrapper>
-                    </ValueWithButtonContainer>
-                  ) : (
-                    <Value
-                      isContextData={isContextData}
-                      meta={meta}
-                      subjectIcon={subjectIcon}
-                      value={value}
-                      raw={raw}
-                    />
-                  )}
+                  <Tablevalue>
+                    {actionButton ? (
+                      <ValueWithButtonContainer>
+                        <Value {...valueProps} />
+                        <ActionButtonWrapper>{actionButton}</ActionButtonWrapper>
+                      </ValueWithButtonContainer>
+                    ) : (
+                      <Value {...valueProps} />
+                    )}
+                  </Tablevalue>
                 </td>
               </tr>
             );
           }
         )}
       </tbody>
-    </table>
+    </Table>
   );
 }
 
@@ -86,6 +86,16 @@ const TableSubject = styled('td')<{wide?: boolean}>`
   }
 `;
 
+const Tablevalue = styled('div')`
+  pre {
+    && {
+      word-break: break-all;
+    }
+  }
+  pre > pre {
+    display: inline-block;
+  }
+`;
 const ValueWithButtonContainer = styled('div')`
   display: grid;
   align-items: center;
@@ -108,4 +118,11 @@ const ActionButtonWrapper = styled('div')`
   height: 100%;
   display: flex;
   align-items: flex-start;
+`;
+
+const Table = styled('table')`
+  > * pre > pre {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
 `;

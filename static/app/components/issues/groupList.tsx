@@ -1,4 +1,5 @@
 import {Component, Fragment} from 'react';
+// eslint-disable-next-line no-restricted-imports
 import {browserHistory, withRouter, WithRouterProps} from 'react-router';
 import isEqual from 'lodash/isEqual';
 import omit from 'lodash/omit';
@@ -19,8 +20,6 @@ import StreamGroup, {
 import {t} from 'sentry/locale';
 import GroupStore from 'sentry/stores/groupStore';
 import {Group} from 'sentry/types';
-import {callIfFunction} from 'sentry/utils/callIfFunction';
-import StreamManager from 'sentry/utils/streamManager';
 import withApi from 'sentry/utils/withApi';
 import {TimePeriodType} from 'sentry/views/alerts/rules/metric/details/constants';
 import {RELATED_ISSUES_BOOLEAN_QUERY_ERROR} from 'sentry/views/alerts/rules/metric/details/relatedIssuesNotAvailable';
@@ -54,7 +53,9 @@ type Props = WithRouterProps & {
   queryFilterDescription?: string;
   queryParams?: Record<string, number | string | string[] | undefined | null>;
   renderEmptyMessage?: () => React.ReactNode;
-  renderErrorMessage?: ({detail: string}, retry: () => void) => React.ReactNode;
+  renderErrorMessage?: (props: {detail: string}, retry: () => void) => React.ReactNode;
+  // where the group list is rendered
+  source?: string;
 } & Partial<typeof defaultProps>;
 
 type State = {
@@ -108,11 +109,10 @@ class GroupList extends Component<Props, State> {
 
   componentWillUnmount() {
     GroupStore.reset();
-    callIfFunction(this.listener);
+    this.listener?.();
   }
 
   listener = GroupStore.listen(() => this.onGroupChange(), undefined);
-  private _streamManager = new StreamManager(GroupStore);
 
   fetchData = async () => {
     GroupStore.loadInitialData([]);
@@ -154,7 +154,7 @@ class GroupList extends Component<Props, State> {
         includeAllArgs: true,
       });
 
-      this._streamManager.push(data);
+      GroupStore.add(data);
 
       this.setState(
         {
@@ -217,7 +217,7 @@ class GroupList extends Component<Props, State> {
   }
 
   onGroupChange() {
-    const groups = this._streamManager.getAllItems();
+    const groups = GroupStore.getAllItems() as Group[];
     if (!isEqual(groups, this.state.groups)) {
       this.setState({groups});
     }
@@ -236,6 +236,7 @@ class GroupList extends Component<Props, State> {
       queryParams,
       queryFilterDescription,
       narrowGroups,
+      source,
     } = this.props;
     const {loading, error, errorData, groups, memberList, pageLinks} = this.state;
 
@@ -294,6 +295,7 @@ class GroupList extends Component<Props, State> {
                   statsPeriod={statsPeriod}
                   queryFilterDescription={queryFilterDescription}
                   narrowGroups={narrowGroups}
+                  source={source}
                 />
               );
             })}

@@ -1,7 +1,7 @@
 import styled from '@emotion/styled';
 import {Location} from 'history';
 
-import CompactSelect from 'sentry/components/forms/compactSelect';
+import CompactSelect from 'sentry/components/compactSelect';
 import {pickBarColor} from 'sentry/components/performance/waterfall/utils';
 import {IconFilter, IconWarning} from 'sentry/icons';
 import {t} from 'sentry/locale';
@@ -22,14 +22,14 @@ type Props = {
 
 function getMenuOptions({spanOps, isLoading, error}) {
   if (isLoading) {
-    return [{key: 'isLoading', isDisabled: true, label: t('Loading…')}];
+    return [{key: 'isLoading', disabled: true, label: t('Loading…')}];
   }
 
   if (error) {
     return [
       {
         key: 'error',
-        isDisabled: true,
+        disabled: true,
         label: t('Error loading operations'),
         leadingItems: <IconWarning color="subText" />,
       },

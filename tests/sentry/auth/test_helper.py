@@ -1,5 +1,4 @@
 from unittest import mock
-from urllib.parse import urlencode
 
 from django.contrib import messages
 from django.contrib.auth.models import AnonymousUser
@@ -23,6 +22,7 @@ from sentry.models import (
     UserEmail,
 )
 from sentry.testutils import TestCase
+from sentry.testutils.silo import control_silo_test
 from sentry.utils import json
 from sentry.utils.redis import clusters
 
@@ -85,6 +85,7 @@ class AuthIdentityHandlerTest(TestCase):
         return user, auth_identity
 
 
+@control_silo_test
 class HandleNewUserTest(AuthIdentityHandlerTest):
     @mock.patch("sentry.analytics.record")
     def test_simple(self, mock_record):
@@ -136,14 +137,14 @@ class HandleNewUserTest(AuthIdentityHandlerTest):
 
     def test_associate_pending_invite(self):
         # The org member invite should have a non matching email, but the
-        # member id and token will match from the cookie, allowing association
+        # member id and token will match from the session, allowing association
         member = OrganizationMember.objects.create(
             organization=self.organization, email="different.email@example.com", token="abc"
         )
 
-        self.request.COOKIES["pending-invite"] = urlencode(
-            {"memberId": member.id, "token": member.token, "url": ""}
-        )
+        self.request.session["invite_member_id"] = member.id
+        self.request.session["invite_token"] = member.token
+        self.save_session()
 
         auth_identity = self.handler.handle_new_user()
 
@@ -154,6 +155,7 @@ class HandleNewUserTest(AuthIdentityHandlerTest):
         assert assigned_member.id == member.id
 
 
+@control_silo_test
 class HandleExistingIdentityTest(AuthIdentityHandlerTest):
     @mock.patch("sentry.auth.helper.auth")
     def test_simple(self, mock_auth):
@@ -198,6 +200,7 @@ class HandleExistingIdentityTest(AuthIdentityHandlerTest):
             features_has.assert_called_once_with("organizations:invite-members", self.organization)
 
 
+@control_silo_test
 class HandleAttachIdentityTest(AuthIdentityHandlerTest):
     @mock.patch("sentry.auth.helper.messages")
     def test_new_identity(self, mock_messages):
@@ -283,6 +286,7 @@ class HandleAttachIdentityTest(AuthIdentityHandlerTest):
         assert not AuthIdentity.objects.filter(id=existing_identity.id).exists()
 
 
+@control_silo_test
 class HandleUnknownIdentityTest(AuthIdentityHandlerTest):
     def _test_simple(self, mock_render, expected_template):
         redirect = self.handler.handle_unknown_identity(self.state)
@@ -349,6 +353,7 @@ class HandleUnknownIdentityTest(AuthIdentityHandlerTest):
     # TODO: More test cases for various values of request.POST.get("op")
 
 
+@control_silo_test
 class AuthHelperTest(TestCase):
     def setUp(self):
         self.provider = "dummy"

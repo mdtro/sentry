@@ -2,6 +2,7 @@ import {Fragment} from 'react';
 import styled from '@emotion/styled';
 import {Location} from 'history';
 
+import GuideAnchor from 'sentry/components/assistant/guideAnchor';
 import {SectionHeading} from 'sentry/components/charts/styles';
 import Link from 'sentry/components/links/link';
 import Placeholder from 'sentry/components/placeholder';
@@ -11,8 +12,8 @@ import {IconOpen} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import {Organization} from 'sentry/types';
 import EventView from 'sentry/utils/discover/eventView';
-import {WebVital} from 'sentry/utils/discover/fields';
 import {QueryError} from 'sentry/utils/discover/genericDiscoverQuery';
+import {WebVital} from 'sentry/utils/fields';
 import {decodeScalar} from 'sentry/utils/queryString';
 import {getTermHelp, PERFORMANCE_TERM} from 'sentry/views/performance/data';
 import {vitalsRouteWithQuery} from 'sentry/views/performance/transactionSummary/transactionVitals/utils';
@@ -111,14 +112,16 @@ function UserStats({
           <SidebarSpacer />
         </Fragment>
       )}
-      <SectionHeading>
-        {t('User Misery')}
-        <QuestionTooltip
-          position="top"
-          title={getTermHelp(organization, PERFORMANCE_TERM.USER_MISERY)}
-          size="sm"
-        />
-      </SectionHeading>
+      <GuideAnchor target="user_misery" position="left">
+        <SectionHeading>
+          {t('User Misery')}
+          <QuestionTooltip
+            position="top"
+            title={getTermHelp(organization, PERFORMANCE_TERM.USER_MISERY)}
+            size="sm"
+          />
+        </SectionHeading>
+      </GuideAnchor>
       {userMisery}
       <SidebarSpacer />
     </Fragment>

@@ -1,6 +1,7 @@
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import responses
+from responses.matchers import query_string_matcher
 
 from sentry import audit_log
 from sentry.integrations.slack import SlackIntegration, SlackIntegrationProvider
@@ -25,10 +26,15 @@ class SlackIntegrationTest(IntegrationTestCase):
         authorizing_user_id="UXXXXXXX1",
         expected_client_id="slack-client-id",
         expected_client_secret="slack-client-secret",
+        customer_domain=None,
     ):
         responses.reset()
 
-        resp = self.client.get(self.init_path)
+        kwargs = {}
+        if customer_domain:
+            kwargs["HTTP_HOST"] = customer_domain
+
+        resp = self.client.get(self.init_path, **kwargs)
         assert resp.status_code == 302
         redirect = urlparse(resp["Location"])
         assert redirect.scheme == "https"
@@ -57,8 +63,8 @@ class SlackIntegrationTest(IntegrationTestCase):
 
         responses.add(
             method=responses.GET,
-            url=f"https://slack.com/api/users.list?limit={SLACK_GET_USERS_PAGE_SIZE}",
-            match_querystring=True,
+            url="https://slack.com/api/users.list",
+            match=[query_string_matcher(f"limit={SLACK_GET_USERS_PAGE_SIZE}")],
             json={
                 "ok": True,
                 "members": [
@@ -93,6 +99,11 @@ class SlackIntegrationTest(IntegrationTestCase):
             )
         )
 
+        if customer_domain:
+            assert resp.status_code == 302
+            assert resp["Location"].startswith(f"http://{customer_domain}/extensions/slack/setup/")
+            resp = self.client.get(resp["Location"], **kwargs)
+
         mock_request = responses.calls[0].request
         req_params = parse_qs(mock_request.body)
         assert req_params["grant_type"] == ["authorization_code"]
@@ -108,6 +119,34 @@ class SlackIntegrationTest(IntegrationTestCase):
     def test_bot_flow(self):
         with self.tasks():
             self.assert_setup_flow()
+
+        integration = Integration.objects.get(provider=self.provider.key)
+        assert integration.external_id == "TXXXXXXX1"
+        assert integration.name == "Example"
+        assert integration.metadata == {
+            "access_token": "xoxb-xxxxxxxxx-xxxxxxxxxx-xxxxxxxxxxxx",
+            "scopes": sorted(self.provider.identity_oauth_scopes),
+            "icon": "http://example.com/ws_icon.jpg",
+            "domain_name": "test-slack-workspace.slack.com",
+            "installation_type": "born_as_bot",
+        }
+        oi = OrganizationIntegration.objects.get(
+            integration=integration, organization=self.organization
+        )
+        assert oi.config == {}
+
+        idp = IdentityProvider.objects.get(type="slack", external_id="TXXXXXXX1")
+        identity = Identity.objects.get(idp=idp, user=self.user, external_id="UXXXXXXX1")
+        assert identity.status == IdentityStatus.VALID
+
+        audit_entry = AuditLogEntry.objects.get(event=audit_log.get_event_id("INTEGRATION_ADD"))
+        audit_log_event = audit_log.get(audit_entry.event)
+        assert audit_log_event.render(audit_entry) == "installed Example for the slack integration"
+
+    @responses.activate
+    def test_bot_flow_customer_domains(self):
+        with self.tasks():
+            self.assert_setup_flow(customer_domain=f"{self.organization.slug}.testserver")
 
         integration = Integration.objects.get(provider=self.provider.key)
         assert integration.external_id == "TXXXXXXX1"
@@ -224,8 +263,8 @@ class SlackIntegrationPostInstallTest(APITestCase):
 
         responses.add(
             method=responses.GET,
-            url=f"https://slack.com/api/users.list?limit={SLACK_GET_USERS_PAGE_SIZE}",
-            match_querystring=True,
+            url="https://slack.com/api/users.list",
+            match=[query_string_matcher(f"limit={SLACK_GET_USERS_PAGE_SIZE}")],
             json={
                 "ok": True,
                 "members": [

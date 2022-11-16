@@ -14,18 +14,17 @@ import {
   trimPackage,
 } from 'sentry/components/events/interfaces/frame/utils';
 import {formatAddress, parseAddress} from 'sentry/components/events/interfaces/utils';
-import AnnotatedText from 'sentry/components/events/meta/annotatedText';
-import {getMeta} from 'sentry/components/events/meta/metaProxy';
+import {AnnotatedText} from 'sentry/components/events/meta/annotatedText';
 import {TraceEventDataSectionContext} from 'sentry/components/events/traceEventDataSection';
-import {STACKTRACE_PREVIEW_TOOLTIP_DELAY} from 'sentry/components/stacktracePreview';
 import StrictClick from 'sentry/components/strictClick';
 import Tooltip from 'sentry/components/tooltip';
+import {SLOW_TOOLTIP_DELAY} from 'sentry/constants';
 import {IconChevron} from 'sentry/icons/iconChevron';
 import {IconInfo} from 'sentry/icons/iconInfo';
 import {IconQuestion} from 'sentry/icons/iconQuestion';
 import {IconWarning} from 'sentry/icons/iconWarning';
 import {t} from 'sentry/locale';
-import {DebugMetaActions} from 'sentry/stores/debugMetaStore';
+import DebugMetaStore from 'sentry/stores/debugMetaStore';
 import space from 'sentry/styles/space';
 import {Frame, PlatformType, SentryAppComponent} from 'sentry/types';
 import {Event} from 'sentry/types/event';
@@ -46,6 +45,7 @@ type Props = {
   platform: PlatformType;
   registers: Record<string, string>;
   emptySourceNotation?: boolean;
+  frameMeta?: Record<any, any>;
   image?: React.ComponentProps<typeof DebugImage>['image'];
   includeSystemFrames?: boolean;
   isExpanded?: boolean;
@@ -54,6 +54,7 @@ type Props = {
   maxLengthOfRelativeAddress?: number;
   nextFrame?: Frame;
   prevFrame?: Frame;
+  registersMeta?: Record<any, any>;
 };
 
 function NativeFrame({
@@ -70,6 +71,8 @@ function NativeFrame({
   components,
   isExpanded,
   platform,
+  registersMeta,
+  frameMeta,
   emptySourceNotation = false,
   /**
    * Is the stack trace being previewed in a hovercard?
@@ -89,7 +92,7 @@ function NativeFrame({
   const absoluteFilePaths =
     traceEventDataSectionContext?.display.includes('absolute-file-paths');
 
-  const tooltipDelay = isHoverPreviewed ? STACKTRACE_PREVIEW_TOOLTIP_DELAY : undefined;
+  const tooltipDelay = isHoverPreviewed ? SLOW_TOOLTIP_DELAY : undefined;
   const foundByStackScanning = frame.trust === 'scan' || frame.trust === 'cfi-scan';
   const startingAddress = image ? image.image_addr : null;
   const packageClickable =
@@ -154,14 +157,14 @@ function NativeFrame({
     if (functionNameHiddenDetails && fullFunctionName && frame.rawFunction) {
       return {
         value: frame.rawFunction,
-        meta: getMeta(frame, 'rawFunction'),
+        meta: frameMeta?.rawFunction?.[''],
       };
     }
 
     if (frame.function) {
       return {
         value: frame.function,
-        meta: getMeta(frame, 'function'),
+        meta: frameMeta?.function?.[''],
       };
     }
 
@@ -195,7 +198,7 @@ function NativeFrame({
           ? `${image.debug_id}!${frame.instructionAddr}`
           : frame.instructionAddr;
 
-      DebugMetaActions.updateFilter(searchTerm);
+      DebugMetaStore.updateFilter(searchTerm);
     }
 
     scrollToElement('#images-loaded');
@@ -219,6 +222,7 @@ function NativeFrame({
       inApp={frame.inApp}
       expandable={expandable}
       expanded={expanded}
+      className="frame"
       data-test-id="stack-trace-frame"
     >
       <StrictClick onClick={handleToggleContext}>
@@ -325,9 +329,7 @@ function NativeFrame({
                 css={isDotnet(platform) && {display: 'block !important'}} // remove important once we get rid of css files
                 title={t('Toggle Context')}
                 aria-label={t('Toggle Context')}
-                tooltipProps={
-                  isHoverPreviewed ? {delay: STACKTRACE_PREVIEW_TOOLTIP_DELAY} : undefined
-                }
+                tooltipProps={isHoverPreviewed ? {delay: SLOW_TOOLTIP_DELAY} : undefined}
                 icon={<IconChevron size="8px" direction={expanded ? 'up' : 'down'} />}
               />
             )}
@@ -348,6 +350,8 @@ function NativeFrame({
             hasAssembly={hasAssembly(frame, platform)}
             expandable={expandable}
             isExpanded={expanded}
+            registersMeta={registersMeta}
+            frameMeta={frameMeta}
           />
         )}
       </RegistersCell>
@@ -412,6 +416,7 @@ const RegistersCell = styled('div')`
   grid-column: 1/-1;
   margin-left: -${space(0.5)};
   margin-right: -${space(0.5)};
+  margin-bottom: -${space(0.5)};
   cursor: default;
 `;
 
@@ -446,7 +451,7 @@ const PackageStatusButton = styled(Button)`
   border: none;
 `;
 
-const GridRow = styled('div')<{expandable: boolean; expanded: boolean; inApp: boolean}>`
+const GridRow = styled('li')<{expandable: boolean; expanded: boolean; inApp: boolean}>`
   ${p => p.expandable && `cursor: pointer;`};
   ${p => p.inApp && `background: ${p.theme.bodyBackground};`};
   ${p =>
@@ -466,6 +471,10 @@ const GridRow = styled('div')<{expandable: boolean; expanded: boolean; inApp: bo
   padding: ${space(0.5)};
   :not(:last-child) {
     border-bottom: 1px solid ${p => p.theme.border};
+  }
+
+  && {
+    border-top: 0;
   }
 
   grid-template-columns: 24px 132px 138px 24px 1fr 24px;

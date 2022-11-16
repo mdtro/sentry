@@ -3,6 +3,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import audit_log
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.rule import RuleEndpoint
 from sentry.api.serializers import serialize
 from sentry.api.serializers.models.rule import RuleSerializer
@@ -21,9 +22,11 @@ from sentry.models import (
 from sentry.rules.actions import trigger_sentry_app_action_creators_for_issues
 from sentry.signals import alert_rule_edited
 from sentry.tasks.integrations.slack import find_channel_id_for_rule
+from sentry.utils import metrics
 from sentry.web.decorators import transaction_start
 
 
+@region_silo_endpoint
 class ProjectRuleDetailsEndpoint(RuleEndpoint):
     @transaction_start("ProjectRuleDetailsEndpoint")
     def get(self, request: Request, project, rule) -> Response:
@@ -141,6 +144,8 @@ class ProjectRuleDetailsEndpoint(RuleEndpoint):
 
             trigger_sentry_app_action_creators_for_issues(kwargs.get("actions"))
 
+            if rule.data["conditions"] != kwargs["conditions"]:
+                metrics.incr("sentry.issue_alert.conditions.edited", sample_rate=1.0)
             updated_rule = project_rules.Updater.run(rule=rule, request=request, **kwargs)
 
             RuleActivity.objects.create(

@@ -7,11 +7,13 @@ from rest_framework import serializers
 from sentry.rules.actions.sentry_apps import NotifyEventSentryAppAction
 from sentry.tasks.sentry_apps import notify_sentry_app
 from sentry.testutils.cases import RuleTestCase
+from sentry.testutils.silo import region_silo_test
 
 ValidationError = serializers.ValidationError
 SENTRY_APP_ALERT_ACTION = "sentry.rules.actions.notify_event_sentry_app.NotifyEventSentryAppAction"
 
 
+@region_silo_test
 class NotifyEventSentryAppActionTest(RuleTestCase):
     rule_cls = NotifyEventSentryAppAction
     schema_data = [
@@ -182,3 +184,26 @@ class NotifyEventSentryAppActionTest(RuleTestCase):
         )
         with pytest.raises(ValidationError):
             rule.self_validate()
+
+    def test_render_label(self):
+        event = self.get_event()
+
+        self.app = self.create_sentry_app(
+            organization=event.organization,
+            name="Test Application",
+            is_alertable=True,
+            schema=self.schema,
+        )
+
+        self.install = self.create_sentry_app_installation(
+            slug="test-application", organization=event.organization
+        )
+
+        rule = self.get_rule(
+            data={
+                "sentryAppInstallationUuid": self.install.uuid,
+                "settings": self.schema_data,
+            }
+        )
+
+        assert rule.render_label() == "Create Task with App"

@@ -1,23 +1,22 @@
 import {Fragment} from 'react';
 import styled from '@emotion/styled';
 import sortBy from 'lodash/sortBy';
-import * as qs from 'query-string';
 
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
 import {openModal} from 'sentry/actionCreators/modal';
-import Access from 'sentry/components/acl/access';
 import AsyncComponent from 'sentry/components/asyncComponent';
 import Button from 'sentry/components/button';
+import EmptyMessage from 'sentry/components/emptyMessage';
 import ExternalLink from 'sentry/components/links/externalLink';
+import Pagination, {CursorHandler} from 'sentry/components/pagination';
 import {Panel, PanelBody, PanelHeader, PanelItem} from 'sentry/components/panels';
 import RepositoryProjectPathConfigForm from 'sentry/components/repositoryProjectPathConfigForm';
 import RepositoryProjectPathConfigRow, {
-  ButtonColumn,
+  ButtonWrapper,
   InputPathColumn,
   NameRepoColumn,
   OutputPathColumn,
 } from 'sentry/components/repositoryProjectPathConfigRow';
-import Tooltip from 'sentry/components/tooltip';
 import {IconAdd} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
 import space from 'sentry/styles/space';
@@ -32,16 +31,19 @@ import {
   getIntegrationIcon,
   trackIntegrationAnalytics,
 } from 'sentry/utils/integrationUtil';
+import withRouteAnalytics, {
+  WithRouteAnalyticsProps,
+} from 'sentry/utils/routeAnalytics/withRouteAnalytics';
 import withOrganization from 'sentry/utils/withOrganization';
 import withProjects from 'sentry/utils/withProjects';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
 import TextBlock from 'sentry/views/settings/components/text/textBlock';
 
-type Props = AsyncComponent['props'] & {
-  integration: Integration;
-  organization: Organization;
-  projects: Project[];
-};
+type Props = AsyncComponent['props'] &
+  WithRouteAnalyticsProps & {
+    integration: Integration;
+    organization: Organization;
+    projects: Project[];
+  };
 
 type State = AsyncComponent['state'] & {
   pathConfigs: RepositoryProjectPathConfig[];
@@ -93,20 +95,23 @@ class IntegrationCodeMappings extends AsyncComponent<Props, State> {
   }
 
   componentDidMount() {
-    const {referrer} = qs.parse(window.location.search) || {};
-    // We don't start new session if the user was coming from choosing
-    // the manual setup option flow from the issue details page
-    const startSession = referrer === 'stacktrace-issue-details' ? false : true;
-    trackIntegrationAnalytics(
+    this.props.setEventNames(
       'integrations.code_mappings_viewed',
-      {
-        integration: this.props.integration.provider.key,
-        integration_type: 'first_party',
-        organization: this.props.organization,
-      },
-      {startSession}
+      'Integrations: Code Mappings Viewed'
     );
+    this.props.setRouteAnalyticsParams({
+      integration: this.props.integration.provider.key,
+      integration_type: 'first_party',
+    });
   }
+
+  trackDocsClick = () => {
+    trackIntegrationAnalytics('integrations.stacktrace_docs_clicked', {
+      view: 'integration_configuration_detail',
+      provider: this.props.integration.provider.key,
+      organization: this.props.organization,
+    });
+  };
 
   handleDelete = async (pathConfig: RepositoryProjectPathConfig) => {
     const {organization} = this.props;
@@ -175,9 +180,27 @@ class IntegrationCodeMappings extends AsyncComponent<Props, State> {
     ));
   };
 
+  /**
+   * This is a workaround to paginate without affecting browserHistory or modifiying the URL
+   * It's necessary because we don't want to affect the pagination state of other tabs on the page.
+   */
+  handleCursor: CursorHandler = async (cursor, _path, query, _direction) => {
+    const orgSlug = this.props.organization.slug;
+    const [pathConfigs, _, responseMeta] = await this.api.requestPromise(
+      `/organizations/${orgSlug}/code-mappings/`,
+      {includeAllArgs: true, query: {...query, cursor}}
+    );
+    this.setState({
+      pathConfigs,
+      pathConfigsPageLinks: responseMeta?.getResponseHeader('link'),
+    });
+  };
+
   renderBody() {
     const pathConfigs = this.pathConfigs;
     const {integration} = this.props;
+    const {pathConfigsPageLinks} = this.state;
+    const docsLink = `https://docs.sentry.io/product/integrations/source-code-mgmt/${integration.provider.key}/#stack-trace-linking`;
 
     return (
       <Fragment>
@@ -185,9 +208,7 @@ class IntegrationCodeMappings extends AsyncComponent<Props, State> {
           {tct(
             `Code Mappings are used to map stack trace file paths to source code file paths. These mappings are the basis for features like Stack Trace Linking. To learn more, [link: read the docs].`,
             {
-              link: (
-                <ExternalLink href="https://docs.sentry.io/product/integrations/source-code-mgmt/gitlab/#stack-trace-linking" />
-              ),
+              link: <ExternalLink href={docsLink} onClick={this.trackDocsClick} />,
             }
           )}
         </TextBlock>
@@ -198,29 +219,16 @@ class IntegrationCodeMappings extends AsyncComponent<Props, State> {
               <NameRepoColumn>{t('Code Mappings')}</NameRepoColumn>
               <InputPathColumn>{t('Stack Trace Root')}</InputPathColumn>
               <OutputPathColumn>{t('Source Code Root')}</OutputPathColumn>
-
-              <Access access={['org:integrations']}>
-                {({hasAccess}) => (
-                  <ButtonColumn>
-                    <Tooltip
-                      title={t(
-                        'You must be an organization owner, manager or admin to edit or remove a code mapping.'
-                      )}
-                      disabled={hasAccess}
-                    >
-                      <AddButton
-                        data-test-id="add-mapping-button"
-                        onClick={() => this.openModal()}
-                        size="xsmall"
-                        icon={<IconAdd size="xs" isCircled />}
-                        disabled={!hasAccess}
-                      >
-                        {t('Add Code Mapping')}
-                      </AddButton>
-                    </Tooltip>
-                  </ButtonColumn>
-                )}
-              </Access>
+              <ButtonWrapper>
+                <Button
+                  data-test-id="add-mapping-button"
+                  onClick={() => this.openModal()}
+                  size="xs"
+                  icon={<IconAdd size="xs" isCircled />}
+                >
+                  {t('Add Code Mapping')}
+                </Button>
+              </ButtonWrapper>
             </HeaderLayout>
           </PanelHeader>
           <PanelBody>
@@ -229,21 +237,16 @@ class IntegrationCodeMappings extends AsyncComponent<Props, State> {
                 icon={getIntegrationIcon(integration.provider.key, 'lg')}
                 action={
                   <Button
-                    href={`https://docs.sentry.io/product/integrations/${integration.provider.key}/#stack-trace-linking`}
-                    size="small"
-                    onClick={() => {
-                      trackIntegrationAnalytics('integrations.stacktrace_docs_clicked', {
-                        view: 'integration_configuration_detail',
-                        provider: this.props.integration.provider.key,
-                        organization: this.props.organization,
-                      });
-                    }}
+                    href={docsLink}
+                    size="sm"
+                    external
+                    onClick={this.trackDocsClick}
                   >
-                    View Documentation
+                    {t('View Documentation')}
                   </Button>
                 }
               >
-                Set up stack trace linking by adding a code mapping.
+                {t('Set up stack trace linking by adding a code mapping.')}
               </EmptyMessage>
             )}
             {pathConfigs
@@ -270,28 +273,30 @@ class IntegrationCodeMappings extends AsyncComponent<Props, State> {
               .filter(item => !!item)}
           </PanelBody>
         </Panel>
+        {pathConfigsPageLinks && (
+          <Pagination pageLinks={pathConfigsPageLinks} onCursor={this.handleCursor} />
+        )}
       </Fragment>
     );
   }
 }
 
-export default withProjects(withOrganization(IntegrationCodeMappings));
-
-const AddButton = styled(Button)``;
+export default withRouteAnalytics(
+  withProjects(withOrganization(IntegrationCodeMappings))
+);
 
 const Layout = styled('div')`
   display: grid;
   grid-column-gap: ${space(1)};
   width: 100%;
   align-items: center;
-  grid-template-columns: 4.5fr 2.5fr 2.5fr 1.6fr;
+  grid-template-columns: 4.5fr 2.5fr 2.5fr max-content;
   grid-template-areas: 'name-repo input-path output-path button';
 `;
 
 const HeaderLayout = styled(Layout)`
   align-items: center;
-  margin: 0;
-  margin-left: ${space(2)};
+  margin: 0 ${space(1)} 0 ${space(2)};
 `;
 
 const ConfigPanelItem = styled(PanelItem)``;

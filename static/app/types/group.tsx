@@ -1,8 +1,9 @@
 import type {PlatformKey} from 'sentry/data/platformCategories';
+import {FieldKind} from 'sentry/utils/fields';
 
 import type {Actor, TimeseriesValue} from './core';
 import type {Event, EventMetadata, EventOrGroupType, Level} from './event';
-import type {Commit, PullRequest} from './integrations';
+import type {Commit, PullRequest, Repository} from './integrations';
 import type {Team} from './organization';
 import type {Project} from './project';
 import type {Release} from './release';
@@ -27,25 +28,78 @@ export type SavedSearch = {
   dateCreated: string;
   id: string;
   isGlobal: boolean;
-  isOrgCustom: boolean;
   isPinned: boolean;
   name: string;
   query: string;
   sort: string;
   type: SavedSearchType;
+  visibility: SavedSearchVisibility;
 };
+
+export enum SavedSearchVisibility {
+  Organization = 'organization',
+  Owner = 'owner',
+  OwnerPinned = 'owner_pinned',
+}
 
 export enum SavedSearchType {
   ISSUE = 0,
   EVENT = 1,
   SESSION = 2,
+  REPLAY = 3,
 }
+
+export enum IssueCategory {
+  PERFORMANCE = 'performance',
+  ERROR = 'error',
+}
+
+export enum IssueType {
+  ERROR = 'error',
+  PERFORMANCE_N_PLUS_ONE_DB_QUERIES = 'performance_n_plus_one_db_queries',
+}
+
+type CapabilityInfo = {
+  enabled: boolean;
+  disabledReason?: string;
+};
+
+/**
+ * Defines what capabilities a category of issue has. Not all categories of
+ * issues work the same.
+ */
+export type IssueCategoryCapabilities = {
+  /**
+   * Are codeowner features enabled for this issue
+   */
+  codeowners: CapabilityInfo;
+  /**
+   * Can the issue be deleted
+   */
+  delete: CapabilityInfo;
+  /**
+   * Can the issue be deleted and discarded
+   */
+  deleteAndDiscard: CapabilityInfo;
+  /**
+   * Can the issue be ignored (and the dropdown options)
+   */
+  ignore: CapabilityInfo;
+  /**
+   * Can the issue be merged
+   */
+  merge: CapabilityInfo;
+  /**
+   * Can the issue be shared
+   */
+  share: CapabilityInfo;
+};
 
 // endpoint: /api/0/issues/:issueId/attachments/?limit=50
 export type IssueAttachment = {
   dateCreated: string;
   event_id: string;
-  headers: Object;
+  headers: object;
   id: string;
   mimetype: string;
   name: string;
@@ -55,7 +109,7 @@ export type IssueAttachment = {
 };
 
 // endpoint: /api/0/projects/:orgSlug/:projSlug/events/:eventId/attachments/
-export type EventAttachment = Omit<IssueAttachment, 'event_id'>;
+export type EventAttachment = IssueAttachment;
 
 /**
  * Issue Tags
@@ -63,7 +117,10 @@ export type EventAttachment = Omit<IssueAttachment, 'event_id'>;
 export type Tag = {
   key: string;
   name: string;
+
   isInput?: boolean;
+
+  kind?: FieldKind;
   /**
    * How many values should be suggested in autocomplete.
    * Overrides SmartSearchBar's `maxSearchItems` prop.
@@ -99,6 +156,7 @@ type Topvalue = {
   value: string;
   // Might not actually exist.
   query?: string;
+  readable?: string;
 };
 
 export type TagWithTopValues = {
@@ -127,7 +185,11 @@ export type InboxDetails = {
   reason?: number;
 };
 
-export type SuggestedOwnerReason = 'suspectCommit' | 'ownershipRule';
+export type SuggestedOwnerReason =
+  | 'suspectCommit'
+  | 'ownershipRule'
+  | 'codeowners'
+  | 'releaseCommit';
 
 // Received from the backend to denote suggested owners of an issue
 export type SuggestedOwner = {
@@ -137,12 +199,16 @@ export type SuggestedOwner = {
 };
 
 export type IssueOwnership = {
-  autoAssignment: boolean;
-  dateCreated: string;
+  autoAssignment:
+    | 'Auto Assign to Suspect Commits'
+    | 'Auto Assign to Issue Owner'
+    | 'Turn off Auto-Assignment';
+  codeownersAutoSync: boolean;
+  dateCreated: string | null;
   fallthrough: boolean;
   isActive: boolean;
-  lastUpdated: string;
-  raw: string;
+  lastUpdated: string | null;
+  raw: string | null;
 };
 
 export enum GroupActivityType {
@@ -168,92 +234,92 @@ export enum GroupActivityType {
   MARK_REVIEWED = 'mark_reviewed',
 }
 
-type GroupActivityBase = {
+interface GroupActivityBase {
   dateCreated: string;
   id: string;
   project: Project;
   assignee?: string;
   issue?: Group;
   user?: null | User;
-};
+}
 
-type GroupActivityNote = GroupActivityBase & {
+interface GroupActivityNote extends GroupActivityBase {
   data: {
     text: string;
   };
   type: GroupActivityType.NOTE;
-};
+}
 
-type GroupActivitySetResolved = GroupActivityBase & {
+interface GroupActivitySetResolved extends GroupActivityBase {
   data: Record<string, any>;
   type: GroupActivityType.SET_RESOLVED;
-};
+}
 
-type GroupActivitySetUnresolved = GroupActivityBase & {
+interface GroupActivitySetUnresolved extends GroupActivityBase {
   data: Record<string, any>;
   type: GroupActivityType.SET_UNRESOLVED;
-};
+}
 
-type GroupActivitySetPublic = GroupActivityBase & {
+interface GroupActivitySetPublic extends GroupActivityBase {
   data: Record<string, any>;
   type: GroupActivityType.SET_PUBLIC;
-};
+}
 
-type GroupActivitySetPrivate = GroupActivityBase & {
+interface GroupActivitySetPrivate extends GroupActivityBase {
   data: Record<string, any>;
   type: GroupActivityType.SET_PRIVATE;
-};
+}
 
-type GroupActivitySetByAge = GroupActivityBase & {
+interface GroupActivitySetByAge extends GroupActivityBase {
   data: Record<string, any>;
   type: GroupActivityType.SET_RESOLVED_BY_AGE;
-};
+}
 
-type GroupActivityUnassigned = GroupActivityBase & {
+interface GroupActivityUnassigned extends GroupActivityBase {
   data: Record<string, any>;
   type: GroupActivityType.UNASSIGNED;
-};
+}
 
-type GroupActivityFirstSeen = GroupActivityBase & {
+interface GroupActivityFirstSeen extends GroupActivityBase {
   data: Record<string, any>;
   type: GroupActivityType.FIRST_SEEN;
-};
+}
 
-type GroupActivityMarkReviewed = GroupActivityBase & {
+interface GroupActivityMarkReviewed extends GroupActivityBase {
   data: Record<string, any>;
   type: GroupActivityType.MARK_REVIEWED;
-};
+}
 
-type GroupActivityRegression = GroupActivityBase & {
+interface GroupActivityRegression extends GroupActivityBase {
   data: {
     version?: string;
   };
   type: GroupActivityType.SET_REGRESSION;
-};
+}
 
-export type GroupActivitySetByResolvedInRelease = GroupActivityBase & {
+export interface GroupActivitySetByResolvedInRelease extends GroupActivityBase {
   data: {
     current_release_version?: string;
     version?: string;
   };
   type: GroupActivityType.SET_RESOLVED_IN_RELEASE;
-};
+}
 
-type GroupActivitySetByResolvedInCommit = GroupActivityBase & {
+interface GroupActivitySetByResolvedInCommit extends GroupActivityBase {
   data: {
     commit: Commit;
   };
   type: GroupActivityType.SET_RESOLVED_IN_COMMIT;
-};
+}
 
-type GroupActivitySetByResolvedInPullRequest = GroupActivityBase & {
+interface GroupActivitySetByResolvedInPullRequest extends GroupActivityBase {
   data: {
     pullRequest: PullRequest;
   };
   type: GroupActivityType.SET_RESOLVED_IN_PULL_REQUEST;
-};
+}
 
-export type GroupActivitySetIgnored = GroupActivityBase & {
+export interface GroupActivitySetIgnored extends GroupActivityBase {
   data: {
     ignoreCount?: number;
     ignoreDuration?: number;
@@ -263,18 +329,18 @@ export type GroupActivitySetIgnored = GroupActivityBase & {
     ignoreWindow?: number;
   };
   type: GroupActivityType.SET_IGNORED;
-};
+}
 
-export type GroupActivityReprocess = GroupActivityBase & {
+export interface GroupActivityReprocess extends GroupActivityBase {
   data: {
     eventCount: number;
     newGroupId: number;
     oldGroupId: number;
   };
   type: GroupActivityType.REPROCESS;
-};
+}
 
-type GroupActivityUnmergeDestination = GroupActivityBase & {
+interface GroupActivityUnmergeDestination extends GroupActivityBase {
   data: {
     fingerprints: Array<string>;
     source?: {
@@ -283,9 +349,9 @@ type GroupActivityUnmergeDestination = GroupActivityBase & {
     };
   };
   type: GroupActivityType.UNMERGE_DESTINATION;
-};
+}
 
-type GroupActivityUnmergeSource = GroupActivityBase & {
+interface GroupActivityUnmergeSource extends GroupActivityBase {
   data: {
     fingerprints: Array<string>;
     destination?: {
@@ -294,33 +360,39 @@ type GroupActivityUnmergeSource = GroupActivityBase & {
     };
   };
   type: GroupActivityType.UNMERGE_SOURCE;
-};
+}
 
-type GroupActivityMerge = GroupActivityBase & {
+interface GroupActivityMerge extends GroupActivityBase {
   data: {
     issues: Array<any>;
   };
   type: GroupActivityType.MERGE;
-};
+}
 
-export type GroupActivityAssigned = GroupActivityBase & {
+export interface GroupActivityAssigned extends GroupActivityBase {
   data: {
     assignee: string;
     assigneeType: string;
     user: Team | User;
     assigneeEmail?: string;
+    /**
+     * If the user was assigned via an integration
+     */
+    integration?: 'projectOwnership' | 'codeowners' | 'slack' | 'msteams';
+    /** Codeowner or Project owner rule as a string */
+    rule?: string;
   };
   type: GroupActivityType.ASSIGNED;
-};
+}
 
-export type GroupActivityCreateIssue = GroupActivityBase & {
+export interface GroupActivityCreateIssue extends GroupActivityBase {
   data: {
     location: string;
     provider: string;
     title: string;
   };
   type: GroupActivityType.CREATE_ISSUE;
-};
+}
 
 export type GroupActivity =
   | GroupActivityNote
@@ -346,22 +418,22 @@ export type GroupActivity =
 
 export type Activity = GroupActivity;
 
-type GroupFiltered = {
+interface GroupFiltered {
   count: string;
   firstSeen: string;
   lastSeen: string;
   stats: Record<string, TimeseriesValue[]>;
   userCount: number;
-};
+}
 
-export type GroupStats = GroupFiltered & {
+export interface GroupStats extends GroupFiltered {
   filtered: GroupFiltered | null;
   id: string;
   lifetime?: GroupFiltered;
   sessionCount?: string | null;
-};
+}
 
-export type BaseGroupStatusReprocessing = {
+export interface BaseGroupStatusReprocessing {
   status: 'reprocessing';
   statusDetails: {
     info: {
@@ -370,7 +442,7 @@ export type BaseGroupStatusReprocessing = {
     } | null;
     pendingEvents: number;
   };
-};
+}
 
 /**
  * Issue Resolution
@@ -390,17 +462,18 @@ export type ResolutionStatusDetails = {
   ignoreUserCount?: number;
   ignoreUserWindow?: number;
   ignoreWindow?: number;
-  inCommit?: Commit;
+  inCommit?: {
+    commit?: string;
+    dateCreated?: string;
+    id?: string;
+    repository?: string | Repository;
+  };
   inNextRelease?: boolean;
   inRelease?: string;
+  repository?: string;
 };
 
-export type UpdateResolutionStatus = {
-  status: ResolutionStatus;
-  statusDetails?: ResolutionStatusDetails;
-};
-
-type BaseGroupStatusResolution = {
+export type GroupStatusResolution = {
   status: ResolutionStatus;
   statusDetails: ResolutionStatusDetails;
 };
@@ -411,7 +484,7 @@ export type GroupRelease = {
 };
 
 // TODO(ts): incomplete
-export type BaseGroup = {
+export interface BaseGroup extends GroupRelease {
   activity: GroupActivity[];
   annotations: string[];
   assignedTo: Actor;
@@ -423,6 +496,8 @@ export type BaseGroup = {
   isPublic: boolean;
   isSubscribed: boolean;
   isUnhandled: boolean;
+  issueCategory: IssueCategory;
+  issueType: IssueType;
   lastSeen: string;
   latestEvent: Event;
   level: Level;
@@ -447,13 +522,26 @@ export type BaseGroup = {
   userReportCount: number;
   inbox?: InboxDetails | null | false;
   owners?: SuggestedOwner[] | null;
-} & GroupRelease;
+}
 
-export type GroupReprocessing = BaseGroup & GroupStats & BaseGroupStatusReprocessing;
-export type GroupResolution = BaseGroup & GroupStats & BaseGroupStatusResolution;
+export interface GroupReprocessing
+  // BaseGroupStatusReprocessing status field (enum) incorrectly extends the BaseGroup status field (string) so we omit it.
+  // A proper fix for this would be to make the status field an enum or string and correctly extend it.
+  extends Omit<BaseGroup, 'status'>,
+    GroupStats,
+    BaseGroupStatusReprocessing {}
+
+export interface GroupResolution
+  // GroupStatusResolution status field (enum) incorrectly extends the BaseGroup status field (string) so we omit it.
+  // A proper fix for this would be to make the status field an enum or string and correctly extend it.
+  extends Omit<BaseGroup, 'status'>,
+    GroupStats,
+    GroupStatusResolution {}
+
 export type Group = GroupResolution | GroupReprocessing;
-export type GroupCollapseRelease = Omit<Group, keyof GroupRelease> &
-  Partial<GroupRelease>;
+export interface GroupCollapseRelease
+  extends Omit<Group, keyof GroupRelease>,
+    Partial<GroupRelease> {}
 
 export type GroupTombstone = {
   actor: AvatarUser;
@@ -531,6 +619,7 @@ export type KeyValueListData = {
   key: string;
   subject: string;
   actionButton?: React.ReactNode;
+  isContextData?: boolean;
   meta?: Meta;
   subjectDataTestId?: string;
   subjectIcon?: React.ReactNode;

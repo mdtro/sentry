@@ -19,8 +19,10 @@ from sentry.models import (
     Repository,
 )
 from sentry.testutils import APITestCase, ReleaseCommitPatchTest, TestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class ProjectReleaseListTest(APITestCase):
     def test_simple(self):
         self.login_as(user=self.user)
@@ -110,6 +112,7 @@ class ProjectReleaseListTest(APITestCase):
         assert len(response.data) == 1
 
 
+@region_silo_test
 class ProjectReleaseListEnvironmentsTest(APITestCase):
     def setUp(self):
         self.login_as(user=self.user)
@@ -311,6 +314,7 @@ class ProjectReleaseListEnvironmentsTest(APITestCase):
         )
 
 
+@region_silo_test
 class ProjectReleaseCreateTest(APITestCase):
     def test_minimal(self):
         self.login_as(user=self.user)
@@ -321,12 +325,19 @@ class ProjectReleaseCreateTest(APITestCase):
             "sentry-api-0-project-releases",
             kwargs={"organization_slug": project.organization.slug, "project_slug": project.slug},
         )
-        response = self.client.post(url, data={"version": "1.2.1"})
+        response = self.client.post(
+            url,
+            data={"version": "1.2.1"},
+            HTTP_USER_AGENT="sentry-cli/2.77.4",
+        )
 
         assert response.status_code == 201, response.content
         assert response.data["version"]
 
-        release = Release.objects.get(version=response.data["version"])
+        release = Release.objects.get(
+            version=response.data["version"],
+            user_agent="sentry-cli/2.77.4",
+        )
         assert not release.owner
         assert release.organization == project.organization
         assert release.projects.first() == project
@@ -476,6 +487,7 @@ class ProjectReleaseCreateTest(APITestCase):
             assert rc.organization_id
 
 
+@region_silo_test
 class ProjectReleaseCreateCommitPatch(ReleaseCommitPatchTest):
     @fixture
     def url(self):

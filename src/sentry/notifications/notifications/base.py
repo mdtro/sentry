@@ -8,19 +8,24 @@ import sentry_sdk
 
 from sentry import analytics
 from sentry.db.models import Model
-from sentry.models import Environment, NotificationSetting, Team
+from sentry.models import Environment, NotificationSetting, Team, User
 from sentry.notifications.types import NotificationSettingTypes, get_notification_setting_type_name
 from sentry.notifications.utils.actions import MessageAction
+from sentry.services.hybrid_cloud.user import APIUser
 from sentry.types.integrations import EXTERNAL_PROVIDERS, ExternalProviders
 from sentry.utils.http import absolute_uri
 from sentry.utils.safe import safe_execute
 
 if TYPE_CHECKING:
-    from sentry.models import Organization, Project, User
+    from sentry.models import Organization, Project
 
 
 # TODO: add abstractmethod decorators
 class BaseNotification(abc.ABC):
+    provider_to_url_format = {
+        ExternalProviders.SLACK: "<{url}|{text}>",
+        ExternalProviders.MSTEAMS: "[{text}]({url})",
+    }
     message_builder = "SlackNotificationsMessageBuilder"
     # some notifications have no settings for it
     notification_setting_type: NotificationSettingTypes | None = None
@@ -60,6 +65,12 @@ class BaseNotification(abc.ABC):
         """
         raise NotImplementedError
 
+    def format_url(self, text: str, url: str, provider: ExternalProviders) -> str:
+        """
+        Format URLs according to the provider options.
+        """
+        return self.provider_to_url_format[provider].format(text=text, url=url)
+
     @property
     @abc.abstractmethod
     def template_path(self) -> str:
@@ -75,45 +86,54 @@ class BaseNotification(abc.ABC):
         pass
 
     def get_recipient_context(
-        self, recipient: Team | User, extra_context: Mapping[str, Any]
+        self, recipient: Team | APIUser, extra_context: Mapping[str, Any]
     ) -> MutableMapping[str, Any]:
         # Basically a noop.
         return {**extra_context}
 
-    def get_notification_title(self, context: Mapping[str, Any] | None = None) -> str:
+    def get_notification_title(
+        self, provider: ExternalProviders, context: Mapping[str, Any] | None = None
+    ) -> str:
         """The subject line when sending this notifications as a chat notification."""
         raise NotImplementedError
 
-    def get_title_link(self, recipient: Team | User) -> str | None:
+    def get_title_link(self, recipient: Team | User, provider: ExternalProviders) -> str | None:
         raise NotImplementedError
 
     def build_attachment_title(self, recipient: Team | User) -> str:
         raise NotImplementedError
 
-    def build_notification_footer(self, recipient: Team | User) -> str:
+    def build_notification_footer(self, recipient: Team | User, provider: ExternalProviders) -> str:
         raise NotImplementedError
 
-    def get_message_description(self, recipient: Team | User) -> Any:
+    def get_message_description(self, recipient: Team | User, provider: ExternalProviders) -> Any:
         context = getattr(self, "context", None)
         return context["text_description"] if context else None
 
     def get_unsubscribe_key(self) -> tuple[str, int, str | None] | None:
         return None
 
-    def get_log_params(self, recipient: Team | User) -> Mapping[str, Any]:
-        return {
+    def get_log_params(self, recipient: Team | APIUser) -> Mapping[str, Any]:
+        group = getattr(self, "group", None)
+        params = {
             "organization_id": self.organization.id,
             "actor_id": recipient.actor_id,
+            "group_id": group.id if group else None,
         }
+        if recipient.class_name() == "User":
+            params["user_id"] = recipient.id
+        return params
 
-    def get_custom_analytics_params(self, recipient: Team | User) -> Mapping[str, Any]:
+    def get_custom_analytics_params(self, recipient: Team | APIUser) -> Mapping[str, Any]:
         """
         Returns a mapping of params used to record the event associated with self.analytics_event.
         By default, use the log params.
         """
         return self.get_log_params(recipient)
 
-    def get_message_actions(self, recipient: Team | User) -> Sequence[MessageAction]:
+    def get_message_actions(
+        self, recipient: Team | User, provider: ExternalProviders
+    ) -> Sequence[MessageAction]:
         return []
 
     def get_callback_data(self) -> Mapping[str, Any] | None:
@@ -147,16 +167,16 @@ class BaseNotification(abc.ABC):
                 )
 
     def get_referrer(
-        self, provider: ExternalProviders, recipient: Optional[Team | User] = None
+        self, provider: ExternalProviders, recipient: Optional[Team | APIUser] = None
     ) -> str:
         # referrer needs the provider and recipient
         referrer = f"{self.metrics_key}-{EXTERNAL_PROVIDERS[provider]}"
         if recipient:
-            referrer += "-" + recipient.__class__.__name__.lower()
+            referrer += "-" + recipient.class_name().lower()
         return referrer
 
     def get_sentry_query_params(
-        self, provider: ExternalProviders, recipient: Optional[Team | User] = None
+        self, provider: ExternalProviders, recipient: Optional[Team | APIUser] = None
     ) -> str:
         """
         Returns the query params that allow us to track clicks into Sentry links.
@@ -165,7 +185,7 @@ class BaseNotification(abc.ABC):
         """
         return f"?referrer={self.get_referrer(provider, recipient)}"
 
-    def get_settings_url(self, recipient: Team | User, provider: ExternalProviders) -> str:
+    def get_settings_url(self, recipient: Team | APIUser, provider: ExternalProviders) -> str:
         # Settings url is dependant on the provider so we know which provider is sending them into Sentry.
         if isinstance(recipient, Team):
             url_str = f"/settings/{self.organization.slug}/teams/{recipient.slug}/notifications/"
@@ -175,11 +195,15 @@ class BaseNotification(abc.ABC):
                 fine_tuning_key = get_notification_setting_type_name(self.notification_setting_type)
                 if fine_tuning_key:
                     url_str += f"{fine_tuning_key}/"
+
         return str(
-            urljoin(absolute_uri(url_str), self.get_sentry_query_params(provider, recipient))
+            urljoin(
+                absolute_uri(url_str),
+                self.get_sentry_query_params(provider, recipient),
+            )
         )
 
-    def determine_recipients(self) -> Iterable[Team | User]:
+    def determine_recipients(self) -> Iterable[Team | APIUser]:
         raise NotImplementedError
 
     def get_notification_providers(self) -> Iterable[ExternalProviders]:
@@ -188,7 +212,7 @@ class BaseNotification(abc.ABC):
 
         return notification_providers()
 
-    def get_participants(self) -> Mapping[ExternalProviders, Iterable[Team | User]]:
+    def get_participants(self) -> Mapping[ExternalProviders, Iterable[Team | APIUser]]:
         # need a notification_setting_type to call this function
         if not self.notification_setting_type:
             raise NotImplementedError
@@ -233,9 +257,8 @@ class ProjectNotification(BaseNotification, abc.ABC):
     def get_log_params(self, recipient: Team | User) -> Mapping[str, Any]:
         return {"project_id": self.project.id, **super().get_log_params(recipient)}
 
-    def build_notification_footer(self, recipient: Team | User) -> str:
-        # notification footer only used for Slack for now
-        settings_url = self.get_settings_url(recipient, ExternalProviders.SLACK)
+    def build_notification_footer(self, recipient: Team | User, provider: ExternalProviders) -> str:
+        settings_url = self.get_settings_url(recipient, provider)
 
         parent = getattr(self, "project", self.organization)
         footer: str = parent.slug
@@ -247,7 +270,10 @@ class ProjectNotification(BaseNotification, abc.ABC):
                 environment = latest_event.get_environment()
             except Environment.DoesNotExist:
                 pass
+
         if environment and getattr(environment, "name", None) != "":
             footer += f" | {environment.name}"
-        footer += f" | <{settings_url}|Notification Settings>"
+
+        footer += f" | {self.format_url(text='Notification Settings', url=settings_url, provider=provider)}"
+
         return footer

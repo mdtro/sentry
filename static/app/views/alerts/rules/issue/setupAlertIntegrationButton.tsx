@@ -50,10 +50,10 @@ export default class SetupAlertIntegrationButton extends AsyncComponent<Props, S
       return null;
     }
 
-    const config = ConfigStore.getConfig();
+    const {isSelfHosted} = ConfigStore.getState();
     // link to docs to set up Slack for self-hosted folks
     const referrerQuery = '?referrer=issue-alert-builder';
-    const buttonProps = config.isSelfHosted
+    const buttonProps = isSelfHosted
       ? {
           href: `https://develop.sentry.dev/integrations/slack/${referrerQuery}`,
         }
@@ -66,7 +66,7 @@ export default class SetupAlertIntegrationButton extends AsyncComponent<Props, S
     return (
       <Tooltip title={t('Send Alerts to Slack. Install the integration now.')}>
         <Button
-          size="small"
+          size="sm"
           icon={<PluginIcon pluginId="slack" size={16} />}
           {...buttonProps}
         >

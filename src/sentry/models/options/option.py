@@ -1,10 +1,11 @@
 from django.db import models
 from django.utils import timezone
 
-from sentry.db.models import Model, sane_repr
-from sentry.db.models.fields import EncryptedPickledObjectField
+from sentry.db.models import Model, control_silo_with_replication_model, sane_repr
+from sentry.db.models.fields.picklefield import PickledObjectField
 
 
+@control_silo_with_replication_model
 class Option(Model):  # type: ignore
     """
     Global options which apply in most situations as defaults,
@@ -17,7 +18,7 @@ class Option(Model):  # type: ignore
     __include_in_export__ = True
 
     key = models.CharField(max_length=64, unique=True)
-    value = EncryptedPickledObjectField()
+    value = PickledObjectField()
     last_updated = models.DateTimeField(default=timezone.now)
 
     class Meta:

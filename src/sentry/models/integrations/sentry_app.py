@@ -17,11 +17,12 @@ from sentry.constants import (
 from sentry.db.models import (
     ArrayField,
     BoundedPositiveIntegerField,
-    EncryptedJsonField,
     FlexibleForeignKey,
     ParanoidManager,
     ParanoidModel,
+    region_silo_only_model,
 )
+from sentry.db.models.fields.jsonfield import JSONField
 from sentry.models.apiscopes import HasApiScopes
 from sentry.utils import metrics
 
@@ -103,6 +104,7 @@ class SentryAppManager(ParanoidManager):
         return self.filter(status=SentryAppStatus.PUBLISHED)
 
 
+@region_silo_only_model
 class SentryApp(ParanoidModel, HasApiScopes):
     __include_in_export__ = True
 
@@ -142,7 +144,7 @@ class SentryApp(ParanoidModel, HasApiScopes):
     events = ArrayField(of=models.TextField, null=True)
 
     overview = models.TextField(null=True)
-    schema = EncryptedJsonField(default=dict)
+    schema = JSONField(default=dict)
 
     date_added = models.DateTimeField(default=timezone.now)
     date_updated = models.DateTimeField(default=timezone.now)

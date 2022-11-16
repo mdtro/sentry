@@ -1,17 +1,15 @@
 import {browserHistory} from 'react-router';
-import {createStore, StoreDefinition} from 'reflux';
+import {createStore} from 'reflux';
 
-import OrganizationsActions from 'sentry/actions/organizationsActions';
 import getGuidesContent from 'sentry/components/assistant/getGuidesContent';
 import {Guide, GuidesContent, GuidesServerData} from 'sentry/components/assistant/types';
 import {IS_ACCEPTANCE_TEST} from 'sentry/constants';
 import ConfigStore from 'sentry/stores/configStore';
 import HookStore from 'sentry/stores/hookStore';
-import {trackAnalyticsEvent} from 'sentry/utils/analytics';
-import {
-  cleanupActiveRefluxSubscriptions,
-  makeSafeRefluxStore,
-} from 'sentry/utils/makeSafeRefluxStore';
+import {Organization} from 'sentry/types';
+import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+
+import {CommonStoreDefinition} from './types';
 
 function guidePrioritySort(a: Guide, b: Guide) {
   const a_priority = a.priority ?? Number.MAX_SAFE_INTEGER;
@@ -57,6 +55,10 @@ export type GuideStoreState = {
    */
   orgSlug: string | null;
   /**
+   * Current Organization
+   */
+  organization: Organization | null;
+  /**
    * The previously shown guide
    */
   prevGuide: Guide | null;
@@ -70,11 +72,12 @@ const defaultState: GuideStoreState = {
   currentStep: 0,
   orgId: null,
   orgSlug: null,
+  organization: null,
   forceShow: false,
   prevGuide: null,
 };
 
-interface GuideStoreDefinition extends StoreDefinition {
+interface GuideStoreDefinition extends CommonStoreDefinition<GuideStoreState> {
   browserHistoryListener: null | (() => void);
 
   closeGuide(dismissed?: boolean): void;
@@ -82,8 +85,10 @@ interface GuideStoreDefinition extends StoreDefinition {
   nextStep(): void;
   recordCue(guide: string): void;
   registerAnchor(target: string): void;
+  setActiveOrganization(data: Organization): void;
   setForceHide(forceHide: boolean): void;
   state: GuideStoreState;
+  teardown(): void;
   toStep(step: number): void;
   unregisterAnchor(target: string): void;
   updatePrevGuide(nextGuide: Guide | null): void;
@@ -91,22 +96,19 @@ interface GuideStoreDefinition extends StoreDefinition {
 
 const storeConfig: GuideStoreDefinition = {
   state: defaultState,
-  unsubscribeListeners: [],
   browserHistoryListener: null,
 
   init() {
-    this.state = defaultState;
+    // XXX: Do not use `this.listenTo` in this store. We avoid usage of reflux
+    // listeners due to their leaky nature in tests.
 
-    this.unsubscribeListeners.push(
-      this.listenTo(OrganizationsActions.setActive, this.onSetActiveOrganization)
-    );
+    this.state = defaultState;
 
     window.addEventListener('load', this.onURLChange, false);
     this.browserHistoryListener = browserHistory.listen(() => this.onURLChange());
   },
 
   teardown() {
-    cleanupActiveRefluxSubscriptions(this.unsubscribeListeners);
     window.removeEventListener('load', this.onURLChange);
 
     if (this.browserHistoryListener) {
@@ -114,14 +116,19 @@ const storeConfig: GuideStoreDefinition = {
     }
   },
 
+  getState() {
+    return this.state;
+  },
+
   onURLChange() {
     this.state.forceShow = window.location.hash === '#assistant';
     this.updateCurrentGuide();
   },
 
-  onSetActiveOrganization(data) {
+  setActiveOrganization(data: Organization) {
     this.state.orgId = data ? data.id : null;
     this.state.orgSlug = data ? data.slug : null;
+    this.state.organization = data ? data : null;
     this.updateCurrentGuide();
   },
 
@@ -196,14 +203,10 @@ const storeConfig: GuideStoreDefinition = {
       return;
     }
 
-    const data = {
+    trackAdvancedAnalyticsEvent('assistant.guide_cued', {
+      organization: this.state.orgId,
       guide,
-      eventKey: 'assistant.guide_cued',
-      eventName: 'Assistant Guide Cued',
-      organization_id: this.state.orgId,
-      user_id: parseInt(user.id, 10),
-    };
-    trackAnalyticsEvent(data);
+    });
   },
 
   updatePrevGuide(nextGuide) {
@@ -280,5 +283,5 @@ const storeConfig: GuideStoreDefinition = {
   },
 };
 
-const GuideStore = createStore(makeSafeRefluxStore(storeConfig));
+const GuideStore = createStore(storeConfig);
 export default GuideStore;

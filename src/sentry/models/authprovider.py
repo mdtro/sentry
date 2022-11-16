@@ -4,14 +4,15 @@ from django.db import models
 from django.utils import timezone
 
 from bitfield import BitField
-from sentry import options
 from sentry.db.models import (
     BoundedPositiveIntegerField,
-    EncryptedJsonField,
     FlexibleForeignKey,
     Model,
+    control_silo_only_model,
     sane_repr,
 )
+from sentry.db.models.fields.jsonfield import JSONField
+from sentry.utils.http import absolute_uri
 
 logger = logging.getLogger("sentry.authprovider")
 
@@ -22,12 +23,26 @@ SCIM_INTERNAL_INTEGRATION_OVERVIEW = (
 )
 
 
+@control_silo_only_model
+class AuthProviderDefaultTeams(Model):
+    __include_in_export__ = False
+
+    authprovider = FlexibleForeignKey("sentry.AuthProvider")
+    team = FlexibleForeignKey("sentry.Team")
+
+    class Meta:
+        app_label = "sentry"
+        db_table = "sentry_authprovider_default_teams"
+        unique_together = (("authprovider", "team"),)
+
+
+@control_silo_only_model
 class AuthProvider(Model):
     __include_in_export__ = True
 
     organization = FlexibleForeignKey("sentry.Organization", unique=True)
     provider = models.CharField(max_length=128)
-    config = EncryptedJsonField()
+    config = JSONField()
 
     date_added = models.DateTimeField(default=timezone.now)
     sync_time = BoundedPositiveIntegerField(null=True)
@@ -38,7 +53,9 @@ class AuthProvider(Model):
     # TODO(dcramer): ManyToMany has the same issue as ForeignKey and we need
     # to either write our own which works w/ BigAuto or switch this to use
     # through.
-    default_teams = models.ManyToManyField("sentry.Team", blank=True)
+    default_teams = models.ManyToManyField(
+        "sentry.Team", blank=True, through=AuthProviderDefaultTeams
+    )
 
     flags = BitField(
         flags=(
@@ -82,9 +99,8 @@ class AuthProvider(Model):
 
     def get_scim_url(self):
         if self.flags.scim_enabled:
-            url_prefix = options.get("system.url-prefix")
             # the SCIM protocol doesn't use trailing slashes in URLs
-            return f"{url_prefix}/api/0/organizations/{self.organization.slug}/scim/v2"
+            return absolute_uri(f"api/0/organizations/{self.organization.slug}/scim/v2")
 
         else:
             return None

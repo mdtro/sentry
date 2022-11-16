@@ -11,11 +11,13 @@ from django.utils import timezone
 from sentry.constants import ObjectStatus
 from sentry.db.models import (
     BoundedPositiveIntegerField,
-    EncryptedJsonField,
     Model,
     UUIDField,
+    region_silo_only_model,
     sane_repr,
 )
+from sentry.db.models.fields.bounded import BoundedBigIntegerField
+from sentry.db.models.fields.jsonfield import JSONField
 
 SCHEDULE_INTERVAL_MAP = {
     "year": rrule.YEARLY,
@@ -69,6 +71,7 @@ def get_monitor_context(monitor):
 class MonitorStatus(ObjectStatus):
     OK = 4
     ERROR = 5
+    MISSED_CHECKIN = 6
 
     @classmethod
     def as_choices(cls):
@@ -79,6 +82,7 @@ class MonitorStatus(ObjectStatus):
             (cls.DELETION_IN_PROGRESS, "deletion_in_progress"),
             (cls.OK, "ok"),
             (cls.ERROR, "error"),
+            (cls.MISSED_CHECKIN, "missed_checkin"),
         )
 
 
@@ -122,12 +126,13 @@ class ScheduleType:
         return dict(cls.as_choices())[value]
 
 
+@region_silo_only_model
 class Monitor(Model):
     __include_in_export__ = True
 
     guid = UUIDField(unique=True, auto_add=True)
-    organization_id = BoundedPositiveIntegerField(db_index=True)
-    project_id = BoundedPositiveIntegerField(db_index=True)
+    organization_id = BoundedBigIntegerField(db_index=True)
+    project_id = BoundedBigIntegerField(db_index=True)
     name = models.CharField(max_length=128)
     status = BoundedPositiveIntegerField(
         default=MonitorStatus.ACTIVE, choices=MonitorStatus.as_choices()
@@ -136,7 +141,7 @@ class Monitor(Model):
         default=MonitorType.UNKNOWN,
         choices=[(k, str(v)) for k, v in MonitorType.as_choices()],
     )
-    config = EncryptedJsonField(default=dict)
+    config = JSONField(default=dict)
     next_checkin = models.DateTimeField(null=True)
     last_checkin = models.DateTimeField(null=True)
     date_added = models.DateTimeField(default=timezone.now)
@@ -175,6 +180,10 @@ class Monitor(Model):
         else:
             next_checkin_base = last_checkin
 
+        new_status = MonitorStatus.ERROR
+        if reason == MonitorFailure.MISSED_CHECKIN:
+            new_status = MonitorStatus.MISSED_CHECKIN
+
         affected = (
             type(self)
             .objects.filter(
@@ -182,7 +191,7 @@ class Monitor(Model):
             )
             .update(
                 next_checkin=self.get_next_scheduled_checkin(next_checkin_base),
-                status=MonitorStatus.ERROR,
+                status=new_status,
                 last_checkin=last_checkin,
             )
         )
@@ -194,6 +203,7 @@ class Monitor(Model):
                 "logentry": {"message": f"Monitor failure: {self.name} ({reason})"},
                 "contexts": {"monitor": get_monitor_context(self)},
                 "fingerprint": ["monitor", str(self.guid), reason],
+                "tags": {"monitor.id": str(self.guid)},
             },
             project=Project(id=self.project_id),
         )

@@ -41,12 +41,14 @@ const SUPPORTED_PROVIDERS: Readonly<CommitProvider[]> = [
 ];
 
 type Props = {
-  commitId: string;
+  commitId?: string;
   inline?: boolean;
+  onClick?: () => void;
   repository?: Repository;
+  showIcon?: boolean;
 };
 
-function CommitLink({inline, commitId, repository}: Props) {
+function CommitLink({inline, commitId, repository, showIcon = true, onClick}: Props) {
   if (!commitId || !repository) {
     return <span>{t('Unknown Commit')}</span>;
   }
@@ -72,12 +74,18 @@ function CommitLink({inline, commitId, repository}: Props) {
     });
 
   return !inline ? (
-    <Button external href={commitUrl} size="small" icon={providerData.icon}>
+    <Button
+      external
+      href={commitUrl}
+      size="sm"
+      icon={showIcon ? providerData.icon : null}
+      onClick={onClick}
+    >
       {shortId}
     </Button>
   ) : (
-    <ExternalLink href={commitUrl}>
-      {providerData.icon}
+    <ExternalLink href={commitUrl} onClick={onClick}>
+      {showIcon ? providerData.icon : null}
       {' ' + shortId}
     </ExternalLink>
   );

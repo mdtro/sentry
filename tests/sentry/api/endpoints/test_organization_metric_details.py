@@ -2,13 +2,18 @@ import copy
 import time
 from unittest.mock import patch
 
+import pytest
+
 from sentry.sentry_metrics import indexer
-from sentry.snuba.metrics import SingularEntityDerivedMetric, resolve_weak
+from sentry.sentry_metrics.configuration import UseCaseKey
+from sentry.sentry_metrics.utils import resolve_weak
+from sentry.snuba.metrics import SingularEntityDerivedMetric
 from sentry.snuba.metrics.fields.snql import complement, division_float
 from sentry.snuba.metrics.naming_layer.mapping import get_mri, get_public_name_from_mri
 from sentry.snuba.metrics.naming_layer.mri import SessionMRI
 from sentry.snuba.metrics.naming_layer.public import SessionMetricKey
 from sentry.testutils.cases import OrganizationMetricMetaIntegrationTestCase
+from sentry.testutils.silo import region_silo_test
 from tests.sentry.api.endpoints.test_organization_metrics import (
     MOCKED_DERIVED_METRICS,
     mocked_mri_resolver,
@@ -28,7 +33,14 @@ MOCKED_DERIVED_METRICS_2.update(
     }
 )
 
+pytestmark = pytest.mark.sentry_metrics
 
+
+def _indexer_record(org_id: int, string: str) -> int:
+    return indexer.record(use_case_id=UseCaseKey.RELEASE_HEALTH, org_id=org_id, string=string)
+
+
+@region_silo_test
 class OrganizationMetricDetailsIntegrationTest(OrganizationMetricMetaIntegrationTestCase):
 
     endpoint = "sentry-api-0-organization-metric-details"
@@ -107,14 +119,14 @@ class OrganizationMetricDetailsIntegrationTest(OrganizationMetricMetaIntegration
         mocked_mri_resolver(["foo.bar"], get_public_name_from_mri),
     )
     def test_metric_details_metric_does_not_have_data(self):
-        indexer.record(self.organization.id, "foo.bar")
+        _indexer_record(self.organization.id, "foo.bar")
         response = self.get_response(
             self.organization.slug,
             "foo.bar",
         )
         assert response.status_code == 404
 
-        indexer.record(self.organization.id, SessionMRI.SESSION.value)
+        _indexer_record(self.organization.id, SessionMRI.SESSION.value)
         response = self.get_response(
             self.organization.slug,
             SessionMetricKey.CRASH_FREE_RATE.value,
@@ -190,7 +202,7 @@ class OrganizationMetricDetailsIntegrationTest(OrganizationMetricMetaIntegration
         Test when not requested metrics have data in the dataset
         """
         mocked_derived_metrics.return_value = MOCKED_DERIVED_METRICS_2
-        indexer.record(self.organization.id, "metric_foo_doe")
+        _indexer_record(self.organization.id, "metric_foo_doe")
         self.store_session(
             self.build_session(
                 project_id=self.project.id,
@@ -230,7 +242,8 @@ class OrganizationMetricDetailsIntegrationTest(OrganizationMetricMetaIntegration
         """
         mocked_derived_metrics.return_value = MOCKED_DERIVED_METRICS_2
         org_id = self.project.organization.id
-        metric_id = indexer.record(org_id, "metric_foo_doe")
+        use_key_id = UseCaseKey.RELEASE_HEALTH
+        metric_id = _indexer_record(org_id, "metric_foo_doe")
 
         self.store_session(
             self.build_session(
@@ -249,7 +262,9 @@ class OrganizationMetricDetailsIntegrationTest(OrganizationMetricMetaIntegration
                     "metric_id": metric_id,
                     "timestamp": (time.time() // 60 - 2) * 60,
                     "tags": {
-                        resolve_weak(org_id, "release"): indexer.record(org_id, "fooww"),
+                        resolve_weak(use_key_id, org_id, "release"): _indexer_record(
+                            org_id, "fooww"
+                        ),
                     },
                     "type": "c",
                     "value": 5,

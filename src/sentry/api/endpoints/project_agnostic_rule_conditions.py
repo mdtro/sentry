@@ -1,10 +1,12 @@
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.organization import OrganizationEndpoint
 from sentry.rules import rules
 
 
+@region_silo_endpoint
 class ProjectAgnosticRuleConditionsEndpoint(OrganizationEndpoint):
     def get(self, request: Request, organization) -> Response:
         """
@@ -24,5 +26,7 @@ class ProjectAgnosticRuleConditionsEndpoint(OrganizationEndpoint):
                 info_extractor(rule_cls)
                 for rule_type, rule_cls in rules
                 if rule_type.startswith("condition/")
+                and rule_cls.id
+                != "sentry.rules.conditions.active_release.ActiveReleaseEventCondition"
             ]
         )

@@ -4,7 +4,7 @@ import {mat3, vec2} from 'gl-matrix';
 
 import {CanvasPoolManager, CanvasScheduler} from 'sentry/utils/profiling/canvasScheduler';
 import {Flamegraph} from 'sentry/utils/profiling/flamegraph';
-import {useDispatchFlamegraphState} from 'sentry/utils/profiling/flamegraph/useFlamegraphState';
+import {useDispatchFlamegraphState} from 'sentry/utils/profiling/flamegraph/hooks/useFlamegraphState';
 import {useFlamegraphTheme} from 'sentry/utils/profiling/flamegraph/useFlamegraphTheme';
 import {FlamegraphCanvas} from 'sentry/utils/profiling/flamegraphCanvas';
 import {FlamegraphView} from 'sentry/utils/profiling/flamegraphView';
@@ -43,7 +43,7 @@ function FlamegraphZoomViewMinimap({
     'pan' | 'click' | 'zoom' | 'scroll' | 'select' | null
   >(null);
 
-  const [dispatch] = useDispatchFlamegraphState();
+  const dispatch = useDispatchFlamegraphState();
 
   const [configSpaceCursor, setConfigSpaceCursor] = useState<vec2 | null>(null);
 
@@ -89,7 +89,8 @@ function FlamegraphZoomViewMinimap({
 
     const drawRectangles = () => {
       flamegraphMiniMapRenderer.draw(
-        flamegraphMiniMapView.fromConfigSpace(flamegraphMiniMapCanvas.physicalSpace)
+        flamegraphMiniMapView.fromConfigSpace(flamegraphMiniMapCanvas.physicalSpace),
+        new Map()
       );
     };
 
@@ -217,7 +218,7 @@ function FlamegraphZoomViewMinimap({
         physicalToConfig
       );
 
-      canvasPoolManager.dispatch('transformConfigView', [
+      canvasPoolManager.dispatch('transform config view', [
         mat3.fromTranslation(mat3.create(), configDelta),
       ]);
 
@@ -254,7 +255,7 @@ function FlamegraphZoomViewMinimap({
           end[0] - start[0],
           flamegraphMiniMapView.configView.height
         );
-        canvasPoolManager.dispatch('setConfigView', [rect]);
+        canvasPoolManager.dispatch('set config view', [rect]);
         setLastInteraction('select');
         return;
       }
@@ -298,7 +299,7 @@ function FlamegraphZoomViewMinimap({
         ]);
 
         const translate = mat3.fromTranslation(mat3.create(), configDelta);
-        canvasPoolManager.dispatch('transformConfigView', [translate]);
+        canvasPoolManager.dispatch('transform config view', [translate]);
       }
     },
     [flamegraphMiniMapCanvas, flamegraphMiniMapView, canvasPoolManager]
@@ -333,7 +334,7 @@ function FlamegraphZoomViewMinimap({
       const scaled = mat3.scale(mat3.create(), translated, vec2.fromValues(scale, 1));
       const translatedBack = mat3.translate(mat3.create(), scaled, invertedConfigCenter);
 
-      canvasPoolManager.dispatch('transformConfigView', [translatedBack]);
+      canvasPoolManager.dispatch('transform config view', [translatedBack]);
     },
     [flamegraphMiniMapCanvas, flamegraphMiniMapView, canvasPoolManager]
   );
@@ -398,7 +399,7 @@ function FlamegraphZoomViewMinimap({
       // rendered on the flamegraph are removed from the view
       setConfigSpaceCursor(null);
 
-      if (evt.metaKey) {
+      if (evt.metaKey || evt.ctrlKey) {
         onMinimapZoom(evt);
         setLastInteraction('zoom');
       } else {

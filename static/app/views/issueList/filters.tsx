@@ -1,76 +1,89 @@
-import {Fragment} from 'react';
+// eslint-disable-next-line no-restricted-imports
+import {withRouter, WithRouterProps} from 'react-router';
 import styled from '@emotion/styled';
 
 import DatePageFilter from 'sentry/components/datePageFilter';
 import EnvironmentPageFilter from 'sentry/components/environmentPageFilter';
 import PageFilterBar from 'sentry/components/organizations/pageFilterBar';
 import ProjectPageFilter from 'sentry/components/projectPageFilter';
+import {
+  makePinSearchAction,
+  makeSaveSearchAction,
+} from 'sentry/components/smartSearchBar/actions';
 import space from 'sentry/styles/space';
 import {Organization, SavedSearch} from 'sentry/types';
 
 import IssueListSearchBar from './searchBar';
-import {TagValueLoader} from './types';
 
-type IssueListSearchBarProps = React.ComponentProps<typeof IssueListSearchBar>;
-
-type Props = {
-  isSearchDisabled: boolean;
+interface Props extends WithRouterProps {
   onSearch: (query: string) => void;
-  onSidebarToggle: (event: React.MouseEvent) => void;
   organization: Organization;
   query: string;
-  savedSearch: SavedSearch;
+  savedSearch: SavedSearch | null;
   sort: string;
-  tagValueLoader: TagValueLoader;
-  tags: NonNullable<IssueListSearchBarProps['supportedTags']>;
-};
+}
 
 function IssueListFilters({
   organization,
   savedSearch,
   query,
-  isSearchDisabled,
   sort,
-  onSidebarToggle,
   onSearch,
-  tagValueLoader,
-  tags,
+  location,
 }: Props) {
+  const pinnedSearch = savedSearch?.isPinned ? savedSearch : undefined;
+
   return (
-    <Fragment>
-      <SearchContainer>
-        <PageFilterBar>
-          <ProjectPageFilter />
-          <EnvironmentPageFilter />
-          <DatePageFilter alignDropdown="left" />
-        </PageFilterBar>
-        <IssueListSearchBar
-          organization={organization}
-          query={query || ''}
-          sort={sort}
-          onSearch={onSearch}
-          disabled={isSearchDisabled}
-          excludeEnvironment
-          supportedTags={tags}
-          tagValueLoader={tagValueLoader}
-          savedSearch={savedSearch}
-          onSidebarToggle={onSidebarToggle}
-        />
-      </SearchContainer>
-    </Fragment>
+    <SearchContainer>
+      <StyledPageFilterBar>
+        <ProjectPageFilter />
+        <EnvironmentPageFilter />
+        <DatePageFilter alignDropdown="left" />
+      </StyledPageFilterBar>
+      <StyledIssueListSearchBar
+        searchSource="main_search"
+        organization={organization}
+        query={query || ''}
+        onSearch={onSearch}
+        excludedTags={['environment']}
+        actionBarItems={
+          organization.features.includes('issue-list-saved-searches-v2')
+            ? []
+            : [
+                makePinSearchAction({sort, pinnedSearch, location}),
+                makeSaveSearchAction({
+                  sort,
+                  disabled: !organization.access.includes('org:write'),
+                }),
+              ]
+        }
+      />
+    </SearchContainer>
   );
 }
 
 const SearchContainer = styled('div')`
-  display: grid;
+  display: flex;
   gap: ${space(2)};
+  flex-wrap: wrap;
   width: 100%;
   margin-bottom: ${space(2)};
-  grid-template-columns: minmax(0, max-content) minmax(20rem, 1fr);
+`;
 
-  @media (max-width: ${p => p.theme.breakpoints.small}) {
-    grid-template-columns: minmax(0, 1fr);
+const StyledPageFilterBar = styled(PageFilterBar)`
+  flex: 0 1 0;
+  width: 100%;
+  max-width: 30rem;
+`;
+
+const StyledIssueListSearchBar = styled(IssueListSearchBar)`
+  flex: 1;
+  width: 100%;
+  min-width: 20rem;
+
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
+    min-width: 25rem;
   }
 `;
 
-export default IssueListFilters;
+export default withRouter(IssueListFilters);

@@ -1,7 +1,7 @@
 import styled from '@emotion/styled';
 
-import DropdownButtonV2 from 'sentry/components/dropdownButtonV2';
-import CompactSelect from 'sentry/components/forms/compactSelect';
+import CompactSelect from 'sentry/components/compactSelect';
+import DropdownButton from 'sentry/components/dropdownButton';
 import SearchBar from 'sentry/components/searchBar';
 import {t, tn} from 'sentry/locale';
 import space from 'sentry/styles/space';
@@ -27,14 +27,10 @@ function SearchBarAction({
   onFilterChange,
   className,
 }: Props) {
-  const trigger: React.ComponentProps<typeof CompactSelect>['trigger'] = ({
-    props,
-    ref,
-  }) => (
+  const trigger: React.ComponentProps<typeof CompactSelect>['trigger'] = props => (
     <StyledTrigger
-      size="small"
+      size="sm"
       priority={filterSelections && filterSelections.length > 0 ? 'primary' : 'default'}
-      ref={ref}
       {...props}
     >
       {filterSelections?.length
@@ -47,6 +43,7 @@ function SearchBarAction({
     <Wrapper className={className}>
       {filterOptions && (
         <CompactSelect
+          size="sm"
           multiple
           maxMenuHeight={400}
           options={filterOptions}
@@ -56,6 +53,7 @@ function SearchBarAction({
         />
       )}
       <StyledSearchBar
+        size="sm"
         onChange={onChange}
         query={query}
         placeholder={placeholder}
@@ -86,42 +84,27 @@ const Wrapper = styled('div')`
   }
 `;
 
-// TODO(matej): remove this once we refactor SearchBar to not use css classes
-// - it could accept size as a prop
 const StyledSearchBar = styled(SearchBar)<{blendWithFilter?: boolean}>`
   width: 100%;
-  position: relative;
-
-  .search-input {
-    height: 34px;
-  }
-  .search-clear-form,
-  .search-input-icon {
-    height: 32px;
-    display: flex;
-    align-items: center;
-  }
 
   ${p =>
     p.blendWithFilter &&
     `
-      .search-input,
-      .search-input:focus {
+      input {
         border-radius: ${p.theme.borderRadiusRight};
         border-left-width: 0;
       }
     `}
 
   @media (max-width: ${p => p.theme.breakpoints.small}) {
-    .search-input,
-    .search-input:focus {
+    input {
       border-radius: ${p => p.theme.borderRadius};
       border-left-width: 1px;
     }
   }
 `;
 
-const StyledTrigger = styled(DropdownButtonV2)`
+const StyledTrigger = styled(DropdownButton)`
   border-radius: ${p => p.theme.borderRadiusLeft};
 
   @media (max-width: ${p => p.theme.breakpoints.small}) {

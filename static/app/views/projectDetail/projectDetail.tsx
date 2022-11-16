@@ -110,14 +110,14 @@ class ProjectDetail extends AsyncView<Props, State> {
     const {location, organization} = this.props;
     const {project: projectId} = location.query;
 
-    return fetchTagValues(
-      this.api,
-      organization.slug,
-      key,
+    return fetchTagValues({
+      api: this.api,
+      orgSlug: organization.slug,
+      tagKey: key,
       search,
-      projectId ? [projectId] : null,
-      location.query
-    );
+      projectIds: projectId ? [projectId] : undefined,
+      endpointParams: location.query,
+    });
   };
 
   syncProjectWithSlug() {
@@ -197,18 +197,7 @@ class ProjectDetail extends AsyncView<Props, State> {
     }
 
     return (
-      <PageFiltersContainer
-        disableMultipleProjectSelection
-        skipLoadLastUsed
-        onUpdateProjects={this.handleProjectChange}
-        relativeDateOptions={
-          hasOnlyBasicChart
-            ? pick(DEFAULT_RELATIVE_PERIODS, ERRORS_BASIC_CHART_PERIODS)
-            : undefined
-        }
-        showAbsolute={!hasOnlyBasicChart}
-        hideGlobalHeader
-      >
+      <PageFiltersContainer skipLoadLastUsed showAbsolute={!hasOnlyBasicChart}>
         <NoProjectMessage organization={organization}>
           <StyledPageContent>
             <Layout.Header>
@@ -237,6 +226,7 @@ class ProjectDetail extends AsyncView<Props, State> {
               <Layout.HeaderActions>
                 <ButtonBar gap={1}>
                   <Button
+                    size="sm"
                     to={
                       // if we are still fetching project, we can use project slug to build issue stream url and let the redirect handle it
                       project?.id
@@ -247,10 +237,12 @@ class ProjectDetail extends AsyncView<Props, State> {
                     {t('View All Issues')}
                   </Button>
                   <CreateAlertButton
+                    size="sm"
                     organization={organization}
                     projectSlug={params.projectId}
                   />
                   <Button
+                    size="sm"
                     icon={<IconSettings />}
                     aria-label={t('Settings')}
                     to={`/settings/${params.orgId}/projects/${params.projectId}/`}
@@ -273,6 +265,11 @@ class ProjectDetail extends AsyncView<Props, State> {
                   <ProjectFilters
                     query={query}
                     onSearch={this.handleSearch}
+                    relativeDateOptions={
+                      hasOnlyBasicChart
+                        ? pick(DEFAULT_RELATIVE_PERIODS, ERRORS_BASIC_CHART_PERIODS)
+                        : undefined
+                    }
                     tagValueLoader={this.tagValueLoader}
                   />
                 </ProjectFiltersWrapper>

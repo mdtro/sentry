@@ -18,11 +18,10 @@ import PerformanceDuration from 'sentry/components/performanceDuration';
 import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
 import {Organization, Project} from 'sentry/types';
-import {trackAnalyticsEvent} from 'sentry/utils/analytics';
+import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
 import EventView, {fromSorts, isFieldSortable} from 'sentry/utils/discover/eventView';
 import {fieldAlignment} from 'sentry/utils/discover/fields';
 import {formatPercentage} from 'sentry/utils/formatters';
-import {useMEPSettingContext} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
 import SegmentExplorerQuery, {
   TableData,
   TableDataRow,
@@ -185,7 +184,7 @@ type Props = {
 type State = {
   widths: number[];
 };
-class _TagExplorer extends Component<Props> {
+export class TagExplorer extends Component<Props> {
   state: State = {
     widths: [],
   };
@@ -210,10 +209,8 @@ class _TagExplorer extends Component<Props> {
 
   onSortClick(currentSortKind?: string, currentSortField?: string) {
     const {organization} = this.props;
-    trackAnalyticsEvent({
-      eventKey: 'performance_views.summary.tag_explorer.sort',
-      eventName: 'Performance Views: Tag Explorer Sorted',
-      organization_id: parseInt(organization.id, 10),
+    trackAdvancedAnalyticsEvent('performance_views.summary.tag_explorer.sort', {
+      organization,
       field: currentSortField,
       direction: currentSortKind,
     });
@@ -271,10 +268,8 @@ class _TagExplorer extends Component<Props> {
 
   handleTagValueClick = (location: Location, tagKey: string, tagValue: string) => {
     const {organization} = this.props;
-    trackAnalyticsEvent({
-      eventKey: 'performance_views.summary.tag_explorer.tag_value',
-      eventName: 'Performance Views: Tag Explorer Value Clicked',
-      organization_id: parseInt(organization.id, 10),
+    trackAdvancedAnalyticsEvent('performance_views.summary.tag_explorer.tag_value', {
+      organization,
     });
 
     const queryString = decodeScalar(location.query.query);
@@ -299,10 +294,8 @@ class _TagExplorer extends Component<Props> {
   ) => {
     return (action: Actions) => {
       const {eventView, location, organization} = this.props;
-      trackAnalyticsEvent({
-        eventKey: 'performance_views.summary.tag_explorer.cell_action',
-        eventName: 'Performance Views: Tag Explorer Cell Action Clicked',
-        organization_id: parseInt(organization.id, 10),
+      trackAdvancedAnalyticsEvent('performance_views.summary.tag_explorer.cell_action', {
+        organization,
       });
 
       const searchConditions = normalizeSearchConditions(eventView.query);
@@ -322,10 +315,8 @@ class _TagExplorer extends Component<Props> {
 
   onTagKeyClick() {
     const {organization} = this.props;
-    trackAnalyticsEvent({
-      eventKey: 'performance_views.summary.tag_explorer.visit_tag_key',
-      eventName: 'Performance Views: Tag Explorer - Visit Tag Key',
-      organization_id: parseInt(organization.id, 10),
+    trackAdvancedAnalyticsEvent('performance_views.summary.tag_explorer.visit_tag_key', {
+      organization,
     });
   }
 
@@ -493,12 +484,9 @@ function TagsHeader(props: HeaderProps) {
   const {pageLinks, organization, location, transactionName} = props;
 
   const handleCursor: CursorHandler = (cursor, pathname, query) => {
-    trackAnalyticsEvent({
-      eventKey: 'performance_views.summary.tag_explorer.change_page',
-      eventName: 'Performance Views: Tag Explorer Change Page',
-      organization_id: parseInt(organization.id, 10),
+    trackAdvancedAnalyticsEvent('performance_views.summary.tag_explorer.change_page', {
+      organization,
     });
-
     browserHistory.push({
       pathname,
       query: {...query, [TAGS_CURSOR_NAME]: cursor},
@@ -506,10 +494,8 @@ function TagsHeader(props: HeaderProps) {
   };
 
   const handleViewAllTagsClick = () => {
-    trackAnalyticsEvent({
-      eventKey: 'performance_views.summary.tag_explorer.change_page',
-      eventName: 'Performance Views: Tag Explorer Change Page',
-      organization_id: parseInt(organization.id, 10),
+    trackAdvancedAnalyticsEvent('performance_views.summary.tag_explorer.change_page', {
+      organization,
     });
   };
 
@@ -528,12 +514,12 @@ function TagsHeader(props: HeaderProps) {
       <Button
         onClick={handleViewAllTagsClick}
         to={viewAllTarget}
-        size="xsmall"
+        size="xs"
         data-test-id="tags-explorer-open-tags"
       >
         {t('View All Tags')}
       </Button>
-      <StyledPagination pageLinks={pageLinks} onCursor={handleCursor} size="xsmall" />
+      <StyledPagination pageLinks={pageLinks} onCursor={handleCursor} size="xs" />
     </Header>
   );
 }
@@ -554,13 +540,3 @@ const Header = styled('div')`
 const StyledPagination = styled(Pagination)`
   margin: 0 0 0 ${space(1)};
 `;
-
-export const TagExplorer = (props: Props) => {
-  const {hideSinceMetricsOnly} = useMEPSettingContext();
-
-  if (hideSinceMetricsOnly) {
-    return null;
-  }
-
-  return <_TagExplorer {...props} />;
-};

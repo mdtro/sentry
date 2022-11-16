@@ -5,7 +5,7 @@ import type {SDKUpdatesSuggestion} from './event';
 import type {Plugin} from './integrations';
 import type {Organization, Team} from './organization';
 import type {Deploy, Release} from './release';
-import type {SamplingRules} from './sampling';
+import type {DynamicSamplingBias, SamplingRule} from './sampling';
 
 // Minimal project representation for use with avatars.
 export type AvatarProject = {
@@ -21,8 +21,9 @@ export type Project = {
   // XXX: These are part of the DetailedProject serializer
   dynamicSampling: {
     next_id: number;
-    rules: SamplingRules;
+    rules: SamplingRule[];
   } | null;
+  dynamicSamplingBiases: DynamicSamplingBias[];
   environments: string[];
   eventProcessing: {
     symbolicationDegraded: boolean;
@@ -31,8 +32,11 @@ export type Project = {
   features: string[];
   firstEvent: 'string' | null;
   firstTransactionEvent: boolean;
+  groupingAutoUpdate: boolean;
   groupingConfig: string;
   hasAccess: boolean;
+  hasProfiles: boolean;
+  hasReplays: boolean;
   hasSessions: boolean;
   id: string;
   isBookmarked: boolean;
@@ -40,8 +44,8 @@ export type Project = {
   isMember: boolean;
   organization: Organization;
   plugins: Plugin[];
-
   processingIssues: number;
+
   relayPiiConfig: string;
   subjectTemplate: string;
   teams: Team[];
@@ -49,6 +53,10 @@ export type Project = {
   hasUserReports?: boolean;
   latestDeploys?: Record<string, Pick<Deploy, 'dateFinished' | 'version'>> | null;
   latestRelease?: Release;
+  /**
+   * @deprecated Use project slug instead
+   */
+  name?: string;
   options?: Record<string, boolean | string>;
   sessionStats?: {
     currentCrashFreeRate: number | null;
@@ -107,7 +115,9 @@ export type Environment = {
   // urlRoutingName: string;
 };
 
-export type TeamWithProjects = Team & {projects: Project[]};
+export interface TeamWithProjects extends Team {
+  projects: Project[];
+}
 
 export type PlatformIntegration = {
   id: PlatformKey;

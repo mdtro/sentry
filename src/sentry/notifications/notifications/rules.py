@@ -14,13 +14,16 @@ from sentry.notifications.utils import (
     get_group_settings_link,
     get_integration_link,
     get_interface_list,
+    get_performance_issue_alert_subtitle,
     get_rules,
+    get_transaction_data,
     has_alert_integration,
     has_integrations,
 )
 from sentry.notifications.utils.participants import get_send_to
 from sentry.plugins.base.structs import Notification
 from sentry.types.integrations import ExternalProviders
+from sentry.types.issues import GROUP_TYPE_TO_TEXT, GroupCategory
 from sentry.utils import metrics
 
 logger = logging.getLogger(__name__)
@@ -47,6 +50,7 @@ class AlertRuleNotification(ProjectNotification):
         self.target_type = target_type
         self.target_identifier = target_identifier
         self.rules = notification.rules
+        self.template_path = f"sentry/emails/{event.group.issue_category.name.lower()}"
 
     def get_participants(self) -> Mapping[ExternalProviders, Iterable[Team | User]]:
         return get_send_to(
@@ -54,6 +58,7 @@ class AlertRuleNotification(ProjectNotification):
             target_type=self.target_type,
             target_identifier=self.target_identifier,
             event=self.event,
+            notification_type=self.notification_setting_type,
         )
 
     def get_subject(self, context: Mapping[str, Any] | None = None) -> str:
@@ -68,7 +73,7 @@ class AlertRuleNotification(ProjectNotification):
     ) -> MutableMapping[str, Any]:
         timezone = pytz.timezone("UTC")
 
-        if isinstance(recipient, User):
+        if recipient.class_name() == "User":
             user_tz = UserOption.objects.get_value(user=recipient, key="timezone", default="UTC")
             try:
                 timezone = pytz.timezone(user_tz)
@@ -95,6 +100,7 @@ class AlertRuleNotification(ProjectNotification):
             "environment": environment,
             "slack_link": get_integration_link(self.organization, "slack"),
             "has_alert_integration": has_alert_integration(self.project),
+            "issue_type": GROUP_TYPE_TO_TEXT.get(self.group.issue_type, "Issue"),
         }
 
         # if the organization has enabled enhanced privacy controls we don't send
@@ -102,16 +108,28 @@ class AlertRuleNotification(ProjectNotification):
         if not enhanced_privacy:
             context.update({"tags": self.event.tags, "interfaces": get_interface_list(self.event)})
 
+        if self.group.issue_category == GroupCategory.PERFORMANCE:
+            context.update(
+                {
+                    "transaction_data": [("Span Evidence", get_transaction_data(self.event), None)],
+                    "subtitle": get_performance_issue_alert_subtitle(self.event),
+                },
+            )
+
         return context
 
-    def get_notification_title(self, context: Mapping[str, Any] | None = None) -> str:
-        from sentry.integrations.slack.message_builder.issues import build_rule_url
+    def get_notification_title(
+        self, provider: ExternalProviders, context: Mapping[str, Any] | None = None
+    ) -> str:
+        from sentry.integrations.message_builder import build_rule_url
 
         title_str = "Alert triggered"
 
         if self.rules:
             rule_url = build_rule_url(self.rules[0], self.group, self.project)
-            title_str += f" <{rule_url}|{self.rules[0].label}>"
+            title_str += (
+                f" {self.format_url(text=self.rules[0].label, url=rule_url, provider=provider)}"
+            )
 
             if len(self.rules) > 1:
                 title_str += f" (+{len(self.rules) - 1} other)"

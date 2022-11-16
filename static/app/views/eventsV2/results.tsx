@@ -14,15 +14,20 @@ import {Client} from 'sentry/api';
 import Alert from 'sentry/components/alert';
 import AsyncComponent from 'sentry/components/asyncComponent';
 import Confirm from 'sentry/components/confirm';
-import {CreateAlertFromViewButton} from 'sentry/components/createAlertButton';
 import DatePageFilter from 'sentry/components/datePageFilter';
 import EnvironmentPageFilter from 'sentry/components/environmentPageFilter';
 import SearchBar from 'sentry/components/events/searchBar';
 import * as Layout from 'sentry/components/layouts/thirds';
+import ExternalLink from 'sentry/components/links/externalLink';
+import LoadingIndicator from 'sentry/components/loadingIndicator';
 import NoProjectMessage from 'sentry/components/noProjectMessage';
 import PageFilterBar from 'sentry/components/organizations/pageFilterBar';
 import PageFiltersContainer from 'sentry/components/organizations/pageFilters/container';
-import {normalizeDateTimeParams} from 'sentry/components/organizations/pageFilters/parse';
+import {
+  normalizeDateTimeParams,
+  normalizeDateTimeString,
+} from 'sentry/components/organizations/pageFilters/parse';
+import {CursorHandler} from 'sentry/components/pagination';
 import ProjectPageFilter from 'sentry/components/projectPageFilter';
 import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
 import {MAX_QUERY_LENGTH} from 'sentry/constants';
@@ -32,6 +37,8 @@ import space from 'sentry/styles/space';
 import {Organization, PageFilters, SavedQuery} from 'sentry/types';
 import {defined, generateQueryWithTag} from 'sentry/utils';
 import {trackAnalyticsEvent} from 'sentry/utils/analytics';
+import {CustomMeasurementsContext} from 'sentry/utils/customMeasurements/customMeasurementsContext';
+import {CustomMeasurementsProvider} from 'sentry/utils/customMeasurements/customMeasurementsProvider';
 import EventView, {isAPIPayloadSimilar} from 'sentry/utils/discover/eventView';
 import {formatTagKey, generateAggregateFields} from 'sentry/utils/discover/fields';
 import {
@@ -39,6 +46,8 @@ import {
   MULTI_Y_AXIS_SUPPORTED_DISPLAY_MODES,
 } from 'sentry/utils/discover/types';
 import localStorage from 'sentry/utils/localStorage';
+import marked from 'sentry/utils/marked';
+import {MetricsCardinalityProvider} from 'sentry/utils/performance/contexts/metricsCardinality';
 import {decodeList, decodeScalar} from 'sentry/utils/queryString';
 import withApi from 'sentry/utils/withApi';
 import withOrganization from 'sentry/utils/withOrganization';
@@ -47,7 +56,7 @@ import withPageFilters from 'sentry/utils/withPageFilters';
 import {addRoutePerformanceContext} from '../performance/utils';
 
 import {DEFAULT_EVENT_VIEW} from './data';
-import ResultsChart from './resultsChart';
+import {MetricsBaselineContainer} from './metricsBaselineContainer';
 import ResultsHeader from './resultsHeader';
 import Table from './table';
 import Tags from './tags';
@@ -60,6 +69,8 @@ type Props = {
   organization: Organization;
   router: InjectedRouter;
   selection: PageFilters;
+  setSavedQuery: (savedQuery?: SavedQuery) => void;
+  isHomepage?: boolean;
   savedQuery?: SavedQuery;
 };
 
@@ -68,13 +79,16 @@ type State = {
   error: string;
   errorCode: number;
   eventView: EventView;
-  incompatibleAlertNotice: React.ReactNode;
   needConfirmation: boolean;
   showTags: boolean;
+  tips: string[];
   totalValues: null | number;
   savedQuery?: SavedQuery;
+  showMetricsAlert?: boolean;
+  showUnparameterizedBanner?: boolean;
 };
 const SHOW_TAGS_STORAGE_KEY = 'discover2:show-tags';
+const SHOW_UNPARAM_BANNER = 'showUnparameterizedBanner';
 
 function readShowTagsState() {
   const value = localStorage.getItem(SHOW_TAGS_STORAGE_KEY);
@@ -93,16 +107,13 @@ function getYAxis(location: Location, eventView: EventView, savedQuery?: SavedQu
     : [eventView.getYAxis()];
 }
 
-class Results extends Component<Props, State> {
+export class Results extends Component<Props, State> {
   static getDerivedStateFromProps(nextProps: Readonly<Props>, prevState: State): State {
-    if (nextProps.savedQuery || !nextProps.loading) {
-      const eventView = EventView.fromSavedQueryOrLocation(
-        nextProps.savedQuery,
-        nextProps.location
-      );
-      return {...prevState, eventView, savedQuery: nextProps.savedQuery};
-    }
-    return prevState;
+    const eventView = EventView.fromSavedQueryOrLocation(
+      nextProps.savedQuery,
+      nextProps.location
+    );
+    return {...prevState, eventView, savedQuery: nextProps.savedQuery};
   }
 
   state: State = {
@@ -116,16 +127,30 @@ class Results extends Component<Props, State> {
     showTags: readShowTagsState(),
     needConfirmation: false,
     confirmedQuery: false,
-    incompatibleAlertNotice: null,
+    tips: [],
   };
 
   componentDidMount() {
-    const {organization, selection, location} = this.props;
+    const {organization, selection, location, isHomepage} = this.props;
+    if (location.query.fromMetric) {
+      this.setState({showMetricsAlert: true});
+      browserHistory.replace({
+        ...location,
+        query: {...location.query, fromMetric: undefined},
+      });
+    }
+    if (location.query[SHOW_UNPARAM_BANNER]) {
+      this.setState({showUnparameterizedBanner: true});
+      browserHistory.replace({
+        ...location,
+        query: {...location.query, [SHOW_UNPARAM_BANNER]: undefined},
+      });
+    }
     loadOrganizationTags(this.tagsApi, organization.slug, selection);
     addRoutePerformanceContext(selection);
     this.checkEventView();
     this.canLoadEvents();
-    if (defined(location.query.id)) {
+    if (!isHomepage && defined(location.query.id)) {
       updateSavedQueryVisit(organization.slug, location.query.id);
     }
   }
@@ -272,20 +297,49 @@ class Results extends Component<Props, State> {
     }
 
     // If the view is not valid, redirect to a known valid state.
-    const {location, organization, selection} = this.props;
-    const nextEventView = EventView.fromNewQueryWithLocation(
-      DEFAULT_EVENT_VIEW,
-      location
-    );
+    const {location, organization, selection, isHomepage, savedQuery} = this.props;
+    const isReplayEnabled = organization.features.includes('session-replay-ui');
+    const defaultEventView = Object.assign({}, DEFAULT_EVENT_VIEW, {
+      fields: isReplayEnabled
+        ? DEFAULT_EVENT_VIEW.fields.concat(['replayId'])
+        : DEFAULT_EVENT_VIEW.fields,
+    });
+
+    const query = isHomepage && savedQuery ? omit(savedQuery, 'id') : defaultEventView;
+    const nextEventView = EventView.fromNewQueryWithLocation(query, location);
     if (nextEventView.project.length === 0 && selection.projects) {
       nextEventView.project = selection.projects;
+    }
+    if (selection.datetime) {
+      const {period, utc, start, end} = selection.datetime;
+      nextEventView.statsPeriod = period ?? undefined;
+      nextEventView.utc = utc?.toString();
+      nextEventView.start = normalizeDateTimeString(start);
+      nextEventView.end = normalizeDateTimeString(end);
     }
     if (location.query?.query) {
       nextEventView.query = decodeScalar(location.query.query, '');
     }
 
-    browserHistory.replace(nextEventView.getResultsViewUrlTarget(organization.slug));
+    if (isHomepage && !this.state.savedQuery) {
+      this.setState({savedQuery, eventView: nextEventView});
+    }
+    browserHistory.replace(
+      nextEventView.getResultsViewUrlTarget(organization.slug, isHomepage)
+    );
   }
+
+  handleCursor: CursorHandler = (cursor, path, query, _direction) => {
+    const {router} = this.props;
+    router.push({
+      pathname: path,
+      query: {...query, cursor},
+    });
+    // Treat pagination like the user already confirmed the query
+    if (!this.state.needConfirmation) {
+      this.handleConfirmed();
+    }
+  };
 
   handleChangeShowTags = () => {
     const {organization} = this.props;
@@ -373,6 +427,27 @@ class Results extends Component<Props, State> {
     }
   };
 
+  handleIntervalChange = (value: string | undefined) => {
+    const {router, location} = this.props;
+
+    const newQuery = {
+      ...location.query,
+      interval: value,
+    };
+
+    if (location.query.interval !== value) {
+      router.push({
+        pathname: location.pathname,
+        query: newQuery,
+      });
+
+      // Treat display changing like the user already confirmed the query
+      if (!this.state.needConfirmation) {
+        this.handleConfirmed();
+      }
+    }
+  };
+
   handleTopEventsChange = (value: string) => {
     const {router, location} = this.props;
 
@@ -420,37 +495,15 @@ class Results extends Component<Props, State> {
   }
 
   generateTagUrl = (key: string, value: string) => {
-    const {organization} = this.props;
+    const {organization, isHomepage} = this.props;
     const {eventView} = this.state;
 
-    const url = eventView.getResultsViewUrlTarget(organization.slug);
+    const url = eventView.getResultsViewUrlTarget(organization.slug, isHomepage);
     url.query = generateQueryWithTag(url.query, {
       key: formatTagKey(key),
       value,
     });
     return url;
-  };
-
-  handleIncompatibleQuery: React.ComponentProps<
-    typeof CreateAlertFromViewButton
-  >['onIncompatibleQuery'] = (incompatibleAlertNoticeFn, errors) => {
-    const {organization} = this.props;
-    const {eventView} = this.state;
-    trackAnalyticsEvent({
-      eventKey: 'discover_v2.create_alert_clicked',
-      eventName: 'Discoverv2: Create alert clicked',
-      status: 'error',
-      query: eventView.query,
-      errors,
-      organization_id: organization.id,
-      url: window.location.href,
-    });
-
-    const incompatibleAlertNotice = incompatibleAlertNoticeFn(() =>
-      this.setState({incompatibleAlertNotice: null})
-    );
-
-    this.setState({incompatibleAlertNotice});
   };
 
   renderError(error: string) {
@@ -468,15 +521,58 @@ class Results extends Component<Props, State> {
     this.setState({error, errorCode});
   };
 
+  renderMetricsFallbackBanner() {
+    const {organization} = this.props;
+    if (
+      !organization.features.includes('performance-mep-bannerless-ui') &&
+      this.state.showMetricsAlert
+    ) {
+      return (
+        <Alert type="info" showIcon>
+          {t(
+            "You've navigated to this page from a performance metric widget generated from processed events. The results here only show indexed events."
+          )}
+        </Alert>
+      );
+    }
+    if (this.state.showUnparameterizedBanner) {
+      return (
+        <Alert type="info" showIcon>
+          {tct(
+            'These are unparameterized transactions. To better organize your transactions, [link:set transaction names manually].',
+            {
+              link: (
+                <ExternalLink href="https://docs.sentry.io/platforms/javascript/guides/react/configuration/integrations/react-router/#parameterized-transaction-names" />
+              ),
+            }
+          )}
+        </Alert>
+      );
+    }
+    return null;
+  }
+
+  renderTips() {
+    const {tips} = this.state;
+    if (tips) {
+      return tips.map((tip, index) => (
+        <Alert type="info" showIcon key={`tip-${index}`}>
+          <TipContainer dangerouslySetInnerHTML={{__html: marked(tip)}} />
+        </Alert>
+      ));
+    }
+    return null;
+  }
+
   render() {
-    const {organization, location, router} = this.props;
+    const {organization, location, router, selection, api, setSavedQuery, isHomepage} =
+      this.props;
     const {
       eventView,
       error,
       errorCode,
       totalValues,
       showTags,
-      incompatibleAlertNotice,
       confirmedQuery,
       savedQuery,
     } = this.state;
@@ -487,87 +583,113 @@ class Results extends Component<Props, State> {
     const title = this.getDocumentTitle();
     const yAxisArray = getYAxis(location, eventView, savedQuery);
 
+    if (!eventView.isValid()) {
+      return <LoadingIndicator />;
+    }
+
     return (
       <SentryDocumentTitle title={title} orgSlug={organization.slug}>
         <StyledPageContent>
           <NoProjectMessage organization={organization}>
             <ResultsHeader
+              setSavedQuery={setSavedQuery}
               errorCode={errorCode}
               organization={organization}
               location={location}
               eventView={eventView}
-              onIncompatibleAlertQuery={this.handleIncompatibleQuery}
               yAxis={yAxisArray}
               router={router}
+              isHomepage={isHomepage}
             />
             <Layout.Body>
-              {incompatibleAlertNotice && <Top fullWidth>{incompatibleAlertNotice}</Top>}
-              <Top fullWidth>
-                {this.renderError(error)}
-                <StyledPageFilterBar condensed>
-                  <ProjectPageFilter />
-                  <EnvironmentPageFilter />
-                  <DatePageFilter alignDropdown="left" />
-                </StyledPageFilterBar>
-                <StyledSearchBar
-                  searchSource="eventsv2"
-                  organization={organization}
-                  projectIds={eventView.project}
-                  query={query}
-                  fields={fields}
-                  onSearch={this.handleSearch}
-                  maxQueryLength={MAX_QUERY_LENGTH}
-                />
-                <ResultsChart
-                  router={router}
-                  organization={organization}
-                  eventView={eventView}
-                  location={location}
-                  onAxisChange={this.handleYAxisChange}
-                  onDisplayChange={this.handleDisplayChange}
-                  onTopEventsChange={this.handleTopEventsChange}
-                  total={totalValues}
-                  confirmedQuery={confirmedQuery}
-                  yAxis={yAxisArray}
-                />
-              </Top>
-              <Layout.Main fullWidth={!showTags}>
-                <Table
-                  organization={organization}
-                  eventView={eventView}
-                  location={location}
-                  title={title}
-                  setError={this.setError}
-                  onChangeShowTags={this.handleChangeShowTags}
-                  showTags={showTags}
-                  confirmedQuery={confirmedQuery}
-                />
-              </Layout.Main>
-              {showTags ? this.renderTagsTable() : null}
-              <Confirm
-                priority="primary"
-                header={<strong>{t('May lead to thumb twiddling')}</strong>}
-                confirmText={t('Do it')}
-                cancelText={t('Nevermind')}
-                onConfirm={this.handleConfirmed}
-                onCancel={this.handleCancelled}
-                message={
-                  <p>
-                    {tct(
-                      `You've created a query that will search for events made
+              <CustomMeasurementsProvider
+                organization={organization}
+                selection={selection}
+              >
+                <Top fullWidth>
+                  {this.renderMetricsFallbackBanner()}
+                  {this.renderError(error)}
+                  {this.renderTips()}
+                  <StyledPageFilterBar condensed>
+                    <ProjectPageFilter />
+                    <EnvironmentPageFilter />
+                    <DatePageFilter alignDropdown="left" />
+                  </StyledPageFilterBar>
+                  <CustomMeasurementsContext.Consumer>
+                    {contextValue => (
+                      <StyledSearchBar
+                        searchSource="eventsv2"
+                        organization={organization}
+                        projectIds={eventView.project}
+                        query={query}
+                        fields={fields}
+                        onSearch={this.handleSearch}
+                        maxQueryLength={MAX_QUERY_LENGTH}
+                        customMeasurements={contextValue?.customMeasurements ?? undefined}
+                      />
+                    )}
+                  </CustomMeasurementsContext.Consumer>
+                  <MetricsCardinalityProvider
+                    organization={organization}
+                    location={location}
+                  >
+                    <MetricsBaselineContainer
+                      api={api}
+                      router={router}
+                      organization={organization}
+                      eventView={eventView}
+                      location={location}
+                      onAxisChange={this.handleYAxisChange}
+                      onDisplayChange={this.handleDisplayChange}
+                      onTopEventsChange={this.handleTopEventsChange}
+                      onIntervalChange={this.handleIntervalChange}
+                      total={totalValues}
+                      confirmedQuery={confirmedQuery}
+                      yAxis={yAxisArray}
+                    />
+                  </MetricsCardinalityProvider>
+                </Top>
+                <Layout.Main fullWidth={!showTags}>
+                  <Table
+                    organization={organization}
+                    eventView={eventView}
+                    location={location}
+                    title={title}
+                    setError={this.setError}
+                    onChangeShowTags={this.handleChangeShowTags}
+                    showTags={showTags}
+                    confirmedQuery={confirmedQuery}
+                    onCursor={this.handleCursor}
+                    isHomepage={isHomepage}
+                    setTips={(tips: string[]) => this.setState({tips})}
+                  />
+                </Layout.Main>
+                {showTags ? this.renderTagsTable() : null}
+                <Confirm
+                  priority="primary"
+                  header={<strong>{t('May lead to thumb twiddling')}</strong>}
+                  confirmText={t('Do it')}
+                  cancelText={t('Nevermind')}
+                  onConfirm={this.handleConfirmed}
+                  onCancel={this.handleCancelled}
+                  message={
+                    <p>
+                      {tct(
+                        `You've created a query that will search for events made
                       [dayLimit:over more than 30 days] for [projectLimit:more than 10 projects].
                       A lot has happened during that time, so this might take awhile.
                       Are you sure you want to do this?`,
-                      {
-                        dayLimit: <strong />,
-                        projectLimit: <strong />,
-                      }
-                    )}
-                  </p>
-                }
-              >
-                {this.setOpenFunction}
-              </Confirm>
+                        {
+                          dayLimit: <strong />,
+                          projectLimit: <strong />,
+                        }
+                      )}
+                    </p>
+                  }
+                >
+                  {this.setOpenFunction}
+                </Confirm>
+              </CustomMeasurementsProvider>
             </Layout.Body>
           </NoProjectMessage>
         </StyledPageContent>
@@ -592,32 +714,46 @@ const Top = styled(Layout.Main)`
   flex-grow: 0;
 `;
 
+const TipContainer = styled('span')`
+  > p {
+    margin: 0;
+  }
+`;
+
 type SavedQueryState = AsyncComponent['state'] & {
   savedQuery?: SavedQuery | null;
 };
 
 class SavedQueryAPI extends AsyncComponent<Props, SavedQueryState> {
+  shouldReload = true;
+
   getEndpoints(): ReturnType<AsyncComponent['getEndpoints']> {
     const {organization, location} = this.props;
+
+    const endpoints: ReturnType<AsyncComponent['getEndpoints']> = [];
     if (location.query.id) {
-      return [
-        [
-          'savedQuery',
-          `/organizations/${organization.slug}/discover/saved/${location.query.id}/`,
-        ],
-      ];
+      endpoints.push([
+        'savedQuery',
+        `/organizations/${organization.slug}/discover/saved/${location.query.id}/`,
+      ]);
+      return endpoints;
     }
-    return [];
+    return endpoints;
   }
 
-  renderLoading() {
-    return this.renderBody();
-  }
+  setSavedQuery = (newSavedQuery?: SavedQuery) => {
+    this.setState({savedQuery: newSavedQuery});
+  };
 
   renderBody(): React.ReactNode {
     const {savedQuery, loading} = this.state;
     return (
-      <Results {...this.props} savedQuery={savedQuery ?? undefined} loading={loading} />
+      <Results
+        {...this.props}
+        savedQuery={savedQuery ?? undefined}
+        loading={loading}
+        setSavedQuery={this.setSavedQuery}
+      />
     );
   }
 }
@@ -639,7 +775,6 @@ function ResultsContainer(props: Props) {
       skipLoadLastUsed={
         props.organization.features.includes('global-views') && !!props.savedQuery
       }
-      hideGlobalHeader
     >
       <SavedQueryAPI {...props} />
     </PageFiltersContainer>

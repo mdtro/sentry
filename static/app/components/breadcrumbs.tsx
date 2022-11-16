@@ -12,7 +12,7 @@ import BreadcrumbDropdown, {
   BreadcrumbDropdownProps,
 } from 'sentry/views/settings/components/settingsBreadcrumb/breadcrumbDropdown';
 
-const BreadcrumbList = styled('div')`
+const BreadcrumbList = styled('nav')`
   display: flex;
   align-items: center;
   padding: ${space(1)} 0;
@@ -139,6 +139,7 @@ const Breadcrumbs = ({crumbs, linkLastItem = false, ...props}: Props) => {
 
 const getBreadcrumbListItemStyles = (p: {theme: Theme}) => css`
   ${p.theme.overflowEllipsis}
+  font-size: ${p.theme.fontSizeLarge};
   color: ${p.theme.gray300};
   width: auto;
 

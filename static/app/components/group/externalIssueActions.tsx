@@ -3,19 +3,17 @@ import styled from '@emotion/styled';
 
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
 import {openModal} from 'sentry/actionCreators/modal';
-import {Client} from 'sentry/api';
 import AsyncComponent from 'sentry/components/asyncComponent';
 import IssueSyncListElement from 'sentry/components/issueSyncListElement';
 import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
 import {Group, GroupIntegration} from 'sentry/types';
-import withApi from 'sentry/utils/withApi';
+import useApi from 'sentry/utils/useApi';
 import IntegrationItem from 'sentry/views/organizationIntegrations/integrationItem';
 
 import ExternalIssueForm from './externalIssueForm';
 
 type Props = AsyncComponent['props'] & {
-  api: Client;
   configurations: GroupIntegration[];
   group: Group;
   onChange: (onSuccess?: () => void, onError?: () => void) => void;
@@ -26,7 +24,8 @@ type LinkedIssues = {
   unlinked: GroupIntegration[];
 };
 
-const ExternalIssueActions = ({configurations, group, onChange, api}: Props) => {
+const ExternalIssueActions = ({configurations, group, onChange}: Props) => {
+  const api = useApi();
   const {linked, unlinked} = configurations
     .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
     .reduce(
@@ -83,7 +82,7 @@ const ExternalIssueActions = ({configurations, group, onChange, api}: Props) => 
             externalIssueDisplayName={issue.displayName}
             onClose={() => deleteIssue(config)}
             integrationType={provider.key}
-            hoverCardHeader={t('Linked %s Integration', provider.name)}
+            hoverCardHeader={t('%s Integration', provider.name)}
             hoverCardBody={
               <div>
                 <IssueTitle>{issue.title}</IssueTitle>
@@ -99,7 +98,7 @@ const ExternalIssueActions = ({configurations, group, onChange, api}: Props) => 
       {unlinked.length > 0 && (
         <IssueSyncListElement
           integrationType={unlinked[0].provider.key}
-          hoverCardHeader={t('Linked %s Integration', unlinked[0].provider.name)}
+          hoverCardHeader={t('%s Integration', unlinked[0].provider.name)}
           hoverCardBody={
             <Container>
               {unlinked.map(config => (
@@ -138,4 +137,4 @@ const Container = styled('div')`
   }
 `;
 
-export default withApi(ExternalIssueActions);
+export default ExternalIssueActions;

@@ -6,7 +6,9 @@ from sentry import digests
 from sentry.digests import Digest
 from sentry.digests import get_option_key as get_digest_option_key
 from sentry.digests.notifications import event_to_record, unsplit_key
+from sentry.eventstore.models import Event
 from sentry.models import NotificationSetting, Project, ProjectOption
+from sentry.notifications.notifications.active_release import ActiveReleaseIssueNotification
 from sentry.notifications.notifications.activity import EMAIL_CLASSES_BY_TYPE
 from sentry.notifications.notifications.digest import DigestNotification
 from sentry.notifications.notifications.rules import AlertRuleNotification
@@ -14,6 +16,8 @@ from sentry.notifications.notifications.user_report import UserReportNotificatio
 from sentry.notifications.types import ActionTargetType
 from sentry.plugins.base.structs import Notification
 from sentry.tasks.digests import deliver_digest
+from sentry.types.integrations import ExternalProviders
+from sentry.types.issues import GroupCategory
 from sentry.utils import metrics
 
 logger = logging.getLogger(__name__)
@@ -36,6 +40,7 @@ class MailAdapter:
         futures: Sequence[RuleFuture],
         target_type: ActionTargetType,
         target_identifier: Optional[int] = None,
+        skip_digests: bool = False,
     ) -> None:
         metrics.incr("mail_adapter.rule_notify")
         rules = []
@@ -59,7 +64,12 @@ class MailAdapter:
         project = event.group.project
         extra["project_id"] = project.id
 
-        if digests.enabled(project):
+        # Only digest errors issues for the moment.
+        if (
+            digests.enabled(project)
+            and event.group.issue_category == GroupCategory.ERROR
+            and not skip_digests
+        ):
 
             def get_digest_option(key):
                 return ProjectOption.objects.get_value(project, get_digest_option_key("mail", key))
@@ -83,6 +93,19 @@ class MailAdapter:
 
         logger.info("mail.adapter.notification.%s" % log_event, extra=extra)
 
+    def active_release_notify(self, event: Event, state) -> None:
+        metrics.incr("mail_adapter.active_release_notify")
+        self.notify_active_release(Notification(event=event, rules=None), state)
+        logger.info(
+            "mail.adapter.notification.active_release.dispatched",
+            extra={
+                "event_id": event.event_id,
+                "group_id": event.group_id,
+                "is_from_mail_action_adapter": True,
+                "project_id": event.group.project.id,
+            },
+        )
+
     @staticmethod
     def get_sendable_user_objects(project):
         """
@@ -90,7 +113,7 @@ class MailAdapter:
         notifications for the provided project.
         """
         recipients_by_provider = NotificationSetting.objects.get_notification_recipients(project)
-        return {user for users in recipients_by_provider.values() for user in users}
+        return recipients_by_provider.get(ExternalProviders.EMAIL, [])
 
     def get_sendable_user_ids(self, project):
         users = self.get_sendable_user_objects(project)
@@ -104,6 +127,12 @@ class MailAdapter:
     @staticmethod
     def notify(notification, target_type, target_identifier=None, **kwargs):
         AlertRuleNotification(notification, target_type, target_identifier).send()
+
+    @staticmethod
+    def notify_active_release(notification, state):
+        ActiveReleaseIssueNotification(
+            notification, state, target_type=ActionTargetType.RELEASE_MEMBERS
+        ).send()
 
     @staticmethod
     def notify_digest(

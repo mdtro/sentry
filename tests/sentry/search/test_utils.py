@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta
-from unittest import mock
 
 import pytest
 from django.utils import timezone
+from freezegun import freeze_time
 
 from sentry.models import EventUser, GroupStatus, Release, Team, User
 from sentry.search.base import ANY
@@ -16,6 +16,7 @@ from sentry.search.utils import (
     tokenize_query,
 )
 from sentry.testutils import TestCase
+from sentry.testutils.silo import control_silo_test
 
 
 def test_get_numeric_field_value():
@@ -162,58 +163,51 @@ class ParseQueryTest(TestCase):
         assert result == {"tags": {"foo-bar": "foobar"}, "query": ""}
 
     # TODO: update docs to include minutes, days, and weeks suffixes
-    @mock.patch("django.utils.timezone.now")
-    def test_age_tag_negative_value(self, now):
-        start = datetime(2016, 1, 1, tzinfo=timezone.utc)
-        now.return_value = start
+    @freeze_time("2016-01-01")
+    def test_age_tag_negative_value(self):
+        start = datetime.now(timezone.utc)
         expected = start - timedelta(hours=12)
         result = self.parse_query("age:-12h")
         assert result == {"tags": {}, "query": "", "age_from": expected, "age_from_inclusive": True}
 
-    @mock.patch("django.utils.timezone.now")
-    def test_age_tag_positive_value(self, now):
-        start = datetime(2016, 1, 1, tzinfo=timezone.utc)
-        now.return_value = start
+    @freeze_time("2016-01-01")
+    def test_age_tag_positive_value(self):
+        start = datetime.now(timezone.utc)
         expected = start - timedelta(hours=12)
         result = self.parse_query("age:+12h")
         assert result == {"tags": {}, "query": "", "age_to": expected, "age_to_inclusive": True}
 
-    @mock.patch("django.utils.timezone.now")
-    def test_age_tag_weeks(self, now):
-        start = datetime(2016, 1, 1, tzinfo=timezone.utc)
-        now.return_value = start
+    @freeze_time("2016-01-01")
+    def test_age_tag_weeks(self):
+        start = datetime.now(timezone.utc)
         expected = start - timedelta(days=35)
         result = self.parse_query("age:+5w")
         assert result == {"tags": {}, "query": "", "age_to": expected, "age_to_inclusive": True}
 
-    @mock.patch("django.utils.timezone.now")
-    def test_age_tag_days(self, now):
-        start = datetime(2016, 1, 1, tzinfo=timezone.utc)
-        now.return_value = start
+    @freeze_time("2016-01-01")
+    def test_age_tag_days(self):
+        start = datetime.now(timezone.utc)
         expected = start - timedelta(days=10)
         result = self.parse_query("age:+10d")
         assert result == {"tags": {}, "query": "", "age_to": expected, "age_to_inclusive": True}
 
-    @mock.patch("django.utils.timezone.now")
-    def test_age_tag_hours(self, now):
-        start = datetime(2016, 1, 1, tzinfo=timezone.utc)
-        now.return_value = start
+    @freeze_time("2016-01-01")
+    def test_age_tag_hours(self):
+        start = datetime.now(timezone.utc)
         expected = start - timedelta(hours=10)
         result = self.parse_query("age:+10h")
         assert result == {"tags": {}, "query": "", "age_to": expected, "age_to_inclusive": True}
 
-    @mock.patch("django.utils.timezone.now")
-    def test_age_tag_minutes(self, now):
-        start = datetime(2016, 1, 1, tzinfo=timezone.utc)
-        now.return_value = start
+    @freeze_time("2016-01-01")
+    def test_age_tag_minutes(self):
+        start = datetime.now(timezone.utc)
         expected = start - timedelta(minutes=30)
         result = self.parse_query("age:+30m")
         assert result == {"tags": {}, "query": "", "age_to": expected, "age_to_inclusive": True}
 
-    @mock.patch("django.utils.timezone.now")
-    def test_two_age_tags(self, now):
-        start = datetime(2016, 1, 1, tzinfo=timezone.utc)
-        now.return_value = start
+    @freeze_time("2016-01-01")
+    def test_two_age_tags(self):
+        start = datetime.now(timezone.utc)
         expected_to = start - timedelta(hours=12)
         expected_from = start - timedelta(hours=24)
         result = self.parse_query("age:+12h age:-24h")
@@ -505,6 +499,24 @@ class ParseQueryTest(TestCase):
         assert result["date_to"] == datetime(2016, 1, 2, tzinfo=timezone.utc)
         assert result["date_to_inclusive"] is False
 
+    def test_date_range_with_timezone(self):
+        result = self.parse_query(
+            "event.timestamp:>2016-01-01T10:00:00-03:00 event.timestamp:<2016-01-02T10:00:00+02:00"
+        )
+        assert result["date_from"] == datetime(2016, 1, 1, 13, 0, 0, tzinfo=timezone.utc)
+        assert result["date_from_inclusive"] is False
+        assert result["date_to"] == datetime(2016, 1, 2, 8, 0, tzinfo=timezone.utc)
+        assert result["date_to_inclusive"] is False
+
+    def test_date_range_with_z_timezone(self):
+        result = self.parse_query(
+            "event.timestamp:>2016-01-01T10:00:00Z event.timestamp:<2016-01-02T10:00:00Z"
+        )
+        assert result["date_from"] == datetime(2016, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        assert result["date_from_inclusive"] is False
+        assert result["date_to"] == datetime(2016, 1, 2, 10, 0, tzinfo=timezone.utc)
+        assert result["date_to_inclusive"] is False
+
     def test_date_range_inclusive(self):
         result = self.parse_query("event.timestamp:>=2016-01-01 event.timestamp:<=2016-01-02")
         assert result["date_from"] == datetime(2016, 1, 1, tzinfo=timezone.utc)
@@ -523,6 +535,14 @@ class ParseQueryTest(TestCase):
     def test_date_approx_precise(self):
         date_value = datetime(2016, 1, 1, tzinfo=timezone.utc)
         result = self.parse_query("event.timestamp:2016-01-01T00:00:00")
+        assert result["date_from"] == date_value - timedelta(minutes=5)
+        assert result["date_from_inclusive"]
+        assert result["date_to"] == date_value + timedelta(minutes=6)
+        assert not result["date_to_inclusive"]
+
+    def test_date_approx_precise_with_timezone(self):
+        date_value = datetime(2016, 1, 1, 5, 0, 0, tzinfo=timezone.utc)
+        result = self.parse_query("event.timestamp:2016-01-01T00:00:00-05:00")
         assert result["date_from"] == date_value - timedelta(minutes=5)
         assert result["date_from_inclusive"]
         assert result["date_to"] == date_value + timedelta(minutes=6)
@@ -687,6 +707,7 @@ class GetLatestReleaseTest(TestCase):
         ]
 
 
+@control_silo_test
 class ConvertUserTagTest(TestCase):
     def test_simple_user_tag(self):
         assert convert_user_tag_to_query("user", "id:123456") == 'user.id:"123456"'

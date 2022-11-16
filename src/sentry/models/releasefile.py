@@ -14,10 +14,12 @@ from django.db import models, router
 
 from sentry import options
 from sentry.db.models import (
+    BaseManager,
     BoundedBigIntegerField,
     BoundedPositiveIntegerField,
     FlexibleForeignKey,
     Model,
+    region_silo_only_model,
     sane_repr,
 )
 from sentry.models import clear_cached_files
@@ -52,6 +54,7 @@ class PublicReleaseFileManager(models.Manager):
         return super().get_queryset().select_related("file").filter(file__type="release.file")
 
 
+@region_silo_only_model
 class ReleaseFile(Model):
     r"""
     A ReleaseFile is an association between a Release and a File.
@@ -63,7 +66,7 @@ class ReleaseFile(Model):
 
     organization_id = BoundedBigIntegerField()
     # DEPRECATED
-    project_id = BoundedPositiveIntegerField(null=True)
+    project_id = BoundedBigIntegerField(null=True)
     release_id = BoundedBigIntegerField()
     file = FlexibleForeignKey("sentry.File")
     ident = models.CharField(max_length=40)
@@ -78,7 +81,7 @@ class ReleaseFile(Model):
 
     __repr__ = sane_repr("release", "ident")
 
-    objects = models.Manager()  # The default manager.
+    objects = BaseManager()  # The default manager.
     public_objects = PublicReleaseFileManager()
 
     class Meta:

@@ -25,8 +25,8 @@ import {
   Column,
   generateFieldAsString,
   getAggregateAlias,
-  WebVital,
 } from 'sentry/utils/discover/fields';
+import {WebVital} from 'sentry/utils/fields';
 import {WEB_VITAL_DETAILS} from 'sentry/utils/performance/vitals/constants';
 import VitalsCardsDiscoverQuery, {
   VitalData,
@@ -466,7 +466,7 @@ function VitalCard(props: VitalCardProps) {
   return (
     <StyledCard interactive={!isNotInteractive} minHeight={minHeight}>
       <HeaderTitle>
-        <OverflowEllipsis>{t(title)}</OverflowEllipsis>
+        <OverflowEllipsis>{title}</OverflowEllipsis>
         <QuestionTooltip size="sm" position="top" title={tooltip} />
       </HeaderTitle>
       <CardContent horizontal={horizontal}>

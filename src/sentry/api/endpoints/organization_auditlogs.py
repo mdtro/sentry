@@ -3,6 +3,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import audit_log
+from sentry.api.base import control_silo_endpoint
 from sentry.api.bases import OrganizationEndpoint
 from sentry.api.bases.organization import OrganizationAuditPermission
 from sentry.api.paginator import DateTimePaginator
@@ -24,6 +25,7 @@ class AuditLogQueryParamSerializer(serializers.Serializer):
             return None
 
 
+@control_silo_endpoint
 class OrganizationAuditLogsEndpoint(OrganizationEndpoint):
     permission_classes = (OrganizationAuditPermission,)
 
@@ -46,10 +48,12 @@ class OrganizationAuditLogsEndpoint(OrganizationEndpoint):
             else:
                 queryset = queryset.filter(event=query["event"])
 
-        return self.paginate(
+        response = self.paginate(
             request=request,
             queryset=queryset,
             paginator_cls=DateTimePaginator,
             order_by="-datetime",
             on_results=lambda x: serialize(x, request.user),
         )
+        response.data = {"rows": response.data, "options": audit_log.get_api_names()}
+        return response

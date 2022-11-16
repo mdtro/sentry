@@ -4,7 +4,7 @@ import {Component, createRef, Fragment} from 'react';
 import styled from '@emotion/styled';
 
 import Count from 'sentry/components/count';
-import {ROW_HEIGHT} from 'sentry/components/performance/waterfall/constants';
+import {ROW_HEIGHT, SpanBarType} from 'sentry/components/performance/waterfall/constants';
 import {MessageRow} from 'sentry/components/performance/waterfall/messageRow';
 import {
   Row,
@@ -44,10 +44,12 @@ import space from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
 import {EventTransaction} from 'sentry/types/event';
 import {defined} from 'sentry/utils';
-import {trackAnalyticsEvent} from 'sentry/utils/analytics';
+import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
 import {generateEventSlug} from 'sentry/utils/discover/urls';
-import * as QuickTraceContext from 'sentry/utils/performance/quickTrace/quickTraceContext';
-import {QuickTraceContextChildrenProps} from 'sentry/utils/performance/quickTrace/quickTraceContext';
+import {
+  QuickTraceContext,
+  QuickTraceContextChildrenProps,
+} from 'sentry/utils/performance/quickTrace/quickTraceContext';
 import {QuickTraceEvent, TraceError} from 'sentry/utils/performance/quickTrace/types';
 import {isTraceFull} from 'sentry/utils/performance/quickTrace/utils';
 
@@ -132,7 +134,7 @@ type SpanBarProps = {
   isLast?: boolean;
   isRoot?: boolean;
   spanBarColor?: string;
-  spanBarHatch?: boolean;
+  spanBarType?: SpanBarType;
   toggleSiblingSpanGroup?: ((span: SpanType, occurrence: number) => void) | undefined;
 };
 
@@ -470,7 +472,7 @@ class SpanBar extends Component<SpanBarProps, SpanBarState> {
   }
 
   renderTitle(errors: TraceError[] | null) {
-    const {generateContentSpanBarRef} = this.props;
+    const {generateContentSpanBarRef, spanBarType} = this.props;
     const {
       span,
       treeDepth,
@@ -488,6 +490,7 @@ class SpanBar extends Component<SpanBarProps, SpanBarState> {
     ) {
       titleFragments.push(
         <Regroup
+          key={`regroup-${span.timestamp}`}
           onClick={event => {
             event.stopPropagation();
             event.preventDefault();
@@ -534,7 +537,10 @@ class SpanBar extends Component<SpanBarProps, SpanBarState> {
             width: '100%',
           }}
         >
-          <RowTitleContent errored={errored}>
+          <RowTitleContent
+            errored={errored}
+            data-test-id={`row-title-content${spanBarType ? `-${spanBarType}` : ''}`}
+          >
             <strong>{titleFragments}</strong>
             {description}
           </RowTitleContent>
@@ -836,19 +842,10 @@ class SpanBar extends Component<SpanBarProps, SpanBarState> {
             expanded={showEmbeddedChildren}
             onClick={() => {
               if (toggleEmbeddedChildren) {
-                if (showEmbeddedChildren) {
-                  trackAnalyticsEvent({
-                    eventKey: 'span_view.embedded_child.hide',
-                    eventName: 'Span View: Hide Embedded Transaction',
-                    organization_id: parseInt(organization.id, 10),
-                  });
-                } else {
-                  trackAnalyticsEvent({
-                    eventKey: 'span_view.embedded_child.show',
-                    eventName: 'Span View: Show Embedded Transaction',
-                    organization_id: parseInt(organization.id, 10),
-                  });
-                }
+                const eventKey = showEmbeddedChildren
+                  ? 'span_view.embedded_child.hide'
+                  : 'span_view.embedded_child.show';
+                trackAdvancedAnalyticsEvent(eventKey, {organization});
 
                 toggleEmbeddedChildren({
                   orgSlug: organization.slug,
@@ -899,7 +896,7 @@ class SpanBar extends Component<SpanBarProps, SpanBarState> {
     errors: TraceError[] | null;
     transactions: QuickTraceEvent[] | null;
   }) {
-    const {span, spanBarColor, spanBarHatch, spanNumber} = this.props;
+    const {span, spanBarColor, spanBarType, spanNumber} = this.props;
     const startTimestamp: number = span.start_timestamp;
     const endTimestamp: number = span.timestamp;
     const duration = Math.abs(endTimestamp - startTimestamp);
@@ -943,7 +940,7 @@ class SpanBar extends Component<SpanBarProps, SpanBarState> {
         >
           {displaySpanBar && (
             <RowRectangle
-              spanBarHatch={!!spanBarHatch}
+              spanBarType={spanBarType}
               style={{
                 backgroundColor: spanBarColor,
                 left: `min(${toPercent(bounds.left || 0)}, calc(100% - 1px))`,
@@ -953,7 +950,7 @@ class SpanBar extends Component<SpanBarProps, SpanBarState> {
               <DurationPill
                 durationDisplay={durationDisplay}
                 showDetail={this.state.showDetail}
-                spanBarHatch={!!spanBarHatch}
+                spanBarType={spanBarType}
               >
                 {durationString}
                 {this.renderWarningText()}

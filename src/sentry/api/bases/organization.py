@@ -5,7 +5,7 @@ from django.core.cache import cache
 from rest_framework.exceptions import ParseError, PermissionDenied
 from rest_framework.request import Request
 
-from sentry.api.base import Endpoint
+from sentry.api.base import Endpoint, resolve_region
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.helpers.environments import get_environments
 from sentry.api.permissions import SentryPermission
@@ -27,7 +27,7 @@ from sentry.models import (
 from sentry.utils import auth
 from sentry.utils.hashlib import hash_values
 from sentry.utils.numbers import format_grouped_length
-from sentry.utils.sdk import bind_organization_context
+from sentry.utils.sdk import bind_organization_context, set_measurement
 
 
 class NoProjects(Exception):
@@ -103,6 +103,15 @@ class OrganizationIntegrationsPermission(OrganizationPermission):
     }
 
 
+class OrganizationIntegrationsLoosePermission(OrganizationPermission):
+    scope_map = {
+        "GET": ["org:read", "org:write", "org:admin", "org:integrations"],
+        "POST": ["org:read", "org:write", "org:admin", "org:integrations"],
+        "PUT": ["org:read", "org:write", "org:admin", "org:integrations"],
+        "DELETE": ["org:admin", "org:integrations"],
+    }
+
+
 class OrganizationAdminPermission(OrganizationPermission):
     scope_map = {
         "GET": ["org:admin"],
@@ -135,9 +144,9 @@ class OrganizationPinnedSearchPermission(OrganizationPermission):
 class OrganizationSearchPermission(OrganizationPermission):
     scope_map = {
         "GET": ["org:read", "org:write", "org:admin"],
-        "POST": ["org:write", "org:admin"],
-        "PUT": ["org:write", "org:admin"],
-        "DELETE": ["org:write", "org:admin"],
+        "POST": ["org:read", "org:write", "org:admin"],
+        "PUT": ["org:read", "org:write", "org:admin"],
+        "DELETE": ["org:read", "org:write", "org:admin"],
     }
 
 
@@ -200,6 +209,11 @@ class OrganizationEndpoint(Endpoint):
                     organization=organization, slug__in=slugs
                 ).values_list("id", flat=True)
                 project_ids = set(projects)
+
+                # return early to prevent passing empty set of project_ids to _get_projects_by_id
+                # which would return all projects in the organization
+                if not project_ids:
+                    return []
             else:
                 project_ids = self.get_requested_project_ids_unchecked(request)
 
@@ -297,7 +311,13 @@ class OrganizationEndpoint(Endpoint):
         # get the top level params -- projects, time range, and environment
         # from the request
         try:
-            start, end = get_date_range_from_params(request.GET, optional=date_filter_optional)
+            data = (
+                request.data if len(request.GET) == 0 and hasattr(request, "data") else request.GET
+            )
+            # For some reason we use range in saved queries
+            if "range" in data and "statsPeriod" not in data:
+                data["statsPeriod"] = data["range"]
+            start, end = get_date_range_from_params(data, optional=date_filter_optional)
             if start and end:
                 total_seconds = (end - start).total_seconds()
                 sentry_sdk.set_tag("query.period", total_seconds)
@@ -326,11 +346,13 @@ class OrganizationEndpoint(Endpoint):
         len_projects = len(projects)
         sentry_sdk.set_tag("query.num_projects", len_projects)
         sentry_sdk.set_tag("query.num_projects.grouped", format_grouped_length(len_projects))
+        set_measurement("query.num_projects", len_projects)
 
         params = {
             "start": start,
             "end": end,
             "project_id": [p.id for p in projects],
+            "project_objects": projects,
             "organization_id": organization.id,
         }
 
@@ -341,7 +363,15 @@ class OrganizationEndpoint(Endpoint):
 
         return params
 
-    def convert_args(self, request: Request, organization_slug, *args, **kwargs):
+    def convert_args(self, request: Request, organization_slug=None, *args, **kwargs):
+        if resolve_region(request) is None:
+            subdomain = getattr(request, "subdomain", None)
+            if subdomain is not None and subdomain != organization_slug:
+                raise ResourceDoesNotExist
+
+        if not organization_slug:
+            raise ResourceDoesNotExist
+
         try:
             organization = Organization.objects.get_from_cache(slug=organization_slug)
         except Organization.DoesNotExist:
@@ -370,7 +400,9 @@ class OrganizationEndpoint(Endpoint):
 class OrganizationReleasesBaseEndpoint(OrganizationEndpoint):
     permission_classes = (OrganizationReleasePermission,)
 
-    def get_projects(self, request: Request, organization, project_ids=None):
+    def get_projects(
+        self, request: Request, organization, project_ids=None, include_all_accessible=True
+    ):
         """
         Get all projects the current user or API token has access to. More
         detail in the parent class's method of the same name.
@@ -392,7 +424,7 @@ class OrganizationReleasesBaseEndpoint(OrganizationEndpoint):
             request,
             organization,
             force_global_perms=has_valid_api_key,
-            include_all_accessible=True,
+            include_all_accessible=include_all_accessible,
             project_ids=project_ids,
         )
 

@@ -32,7 +32,7 @@ const ActionButtons = ({
 }: Props) => {
   const appDashboardButton = (
     <StyledButton
-      size="xsmall"
+      size="xs"
       icon={<IconStats />}
       to={`/settings/${org.slug}/developer-settings/${app.slug}/dashboard/`}
     >
@@ -45,7 +45,7 @@ const ActionButtons = ({
       disabled={!!disablePublishReason}
       title={disablePublishReason}
       icon={<IconUpgrade />}
-      size="xsmall"
+      size="xs"
       onClick={onPublish}
     >
       {t('Publish')}
@@ -53,15 +53,15 @@ const ActionButtons = ({
   ) : null;
 
   const deleteConfirmMessage = t(
-    `Deleting ${app.slug} will also delete any and all of its installations. \
-         This is a permanent action. Do you wish to continue?`
+    `Deleting %s will also delete any and all of its installations. This is a permanent action. Do you wish to continue?`,
+    app.slug
   );
   const deleteButton = showDelete ? (
     disableDeleteReason ? (
       <StyledButton
         disabled
         title={disableDeleteReason}
-        size="xsmall"
+        size="xs"
         icon={<IconDelete />}
         aria-label="Delete"
       />
@@ -73,7 +73,7 @@ const ActionButtons = ({
           priority="danger"
           onConfirm={() => onDelete(app)}
         >
-          <StyledButton size="xsmall" icon={<IconDelete />} aria-label="Delete" />
+          <StyledButton size="xs" icon={<IconDelete />} aria-label="Delete" />
         </ConfirmDelete>
       )
     )

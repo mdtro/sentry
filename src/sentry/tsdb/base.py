@@ -1,4 +1,3 @@
-from collections import OrderedDict
 from collections.abc import Callable
 from datetime import timedelta
 from enum import Enum
@@ -6,7 +5,6 @@ from enum import Enum
 from django.conf import settings
 from django.utils import timezone
 
-from sentry.utils.compat import map
 from sentry.utils.dates import to_datetime, to_timestamp
 from sentry.utils.services import Service
 
@@ -22,6 +20,9 @@ class TSDBModel(Enum):
     project = 1
     group = 4
     release = 7
+
+    # number of transactions seen specific to a group
+    group_performance = 10
 
     # the number of events sent to the server
     project_total_received = 100
@@ -43,6 +44,8 @@ class TSDBModel(Enum):
     users_affected_by_group = 300
     # distinct count of users that have been affected by an event in a project
     users_affected_by_project = 301
+    # distinct count of users that have been affected by an event in a performance group
+    users_affected_by_perf_group = 302
 
     # frequent_organization_received_by_system = 400
     # frequent_organization_rejected_by_system = 401
@@ -162,7 +165,7 @@ class BaseTSDB(Service):
         if rollups is None:
             rollups = settings.SENTRY_TSDB_ROLLUPS
 
-        self.rollups = OrderedDict(rollups)
+        self.rollups = dict(rollups)
 
         # The ``SENTRY_TSDB_LEGACY_ROLLUPS`` setting should be used to store
         # previous rollup configuration values after they are modified in
@@ -265,7 +268,7 @@ class BaseTSDB(Service):
                 end,
                 rollup=rollup,
             )
-            rollups[rollup] = map(to_datetime, series)
+            rollups[rollup] = [to_datetime(item) for item in series]
         return rollups
 
     def make_series(self, default, start, end=None, rollup=None):

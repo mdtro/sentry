@@ -10,6 +10,7 @@ import QuestionTooltip from 'sentry/components/questionTooltip';
 import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
+import {objectIsEmpty} from 'sentry/utils';
 import {TableData, TableDataRow} from 'sentry/utils/discover/discoverQuery';
 import EventView, {MetaType} from 'sentry/utils/discover/eventView';
 import {getFieldRenderer} from 'sentry/utils/discover/fieldRenderers';
@@ -18,6 +19,7 @@ import {
   fieldAlignment,
   getAggregateAlias,
 } from 'sentry/utils/discover/fields';
+import {VisuallyCompleteWithData} from 'sentry/utils/performanceForSentry';
 import CellAction, {Actions} from 'sentry/views/eventsV2/table/cellAction';
 import {TableColumn} from 'sentry/views/eventsV2/table/types';
 import {GridCell, GridCellNumber} from 'sentry/views/performance/styles';
@@ -140,7 +142,7 @@ class TransactionsTable extends PureComponent<Props> {
 
       const target = generateLink?.[field]?.(organization, row, location.query);
 
-      if (target) {
+      if (target && !objectIsEmpty(target)) {
         rendered = (
           <Link data-test-id={`view-${fields[index]}`} to={target}>
             {rendered}
@@ -205,17 +207,19 @@ class TransactionsTable extends PureComponent<Props> {
     const loader = <LoadingIndicator style={{margin: '70px auto'}} />;
 
     return (
-      <PanelTable
-        data-test-id="transactions-table"
-        isEmpty={!hasResults}
-        emptyMessage={t('No transactions found')}
-        headers={this.renderHeader()}
-        isLoading={isLoading}
-        disablePadding
-        loader={loader}
-      >
-        {this.renderResults()}
-      </PanelTable>
+      <VisuallyCompleteWithData id="TransactionsTable" hasData={hasResults}>
+        <PanelTable
+          data-test-id="transactions-table"
+          isEmpty={!hasResults}
+          emptyMessage={t('No transactions found')}
+          headers={this.renderHeader()}
+          isLoading={isLoading}
+          disablePadding
+          loader={loader}
+        >
+          {this.renderResults()}
+        </PanelTable>
+      </VisuallyCompleteWithData>
     );
   }
 }

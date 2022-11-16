@@ -24,34 +24,11 @@ require() {
 }
 
 configure-sentry-cli() {
-    # XXX: For version 1.70.1 there's a bug hitting SENTRY_CLI_NO_EXIT_TRAP: unbound variable
-    # We can remove this after it's fixed
-    # https://github.com/getsentry/sentry-cli/pull/1059
-    export SENTRY_CLI_NO_EXIT_TRAP=${SENTRY_CLI_NO_EXIT_TRAP-0}
     if [ -z "${SENTRY_DEVENV_NO_REPORT+x}" ]; then
         if ! require sentry-cli; then
             curl -sL https://sentry.io/get-cli/ | SENTRY_CLI_VERSION=2.0.4 bash
         fi
-        # This exported variable does not persist outside of the calling script, thus, not affecting other
-        # parts of the system
-        export SENTRY_DSN="https://9bdb053cb8274ea69231834d1edeec4c@o1.ingest.sentry.io/5723503"
-        eval "$(sentry-cli bash-hook)"
     fi
-}
-
-query-mac() {
-    [[ $(uname -s) = 'Darwin' ]]
-}
-
-query-big-sur() {
-    if require sw_vers && sw_vers -productVersion | grep -E "11\." >/dev/null; then
-        return 0
-    fi
-    return 1
-}
-
-query-apple-m1() {
-    query-mac && [[ $(uname -m) = 'arm64' ]]
 }
 
 query-valid-python-version() {
@@ -98,8 +75,12 @@ sudo-askpass() {
     fi
 }
 
+pip-install() {
+    pip install --constraint requirements-dev-frozen.txt "$@"
+}
+
 upgrade-pip() {
-    pip install --upgrade "pip==21.1.2" "wheel==0.36.2"
+    pip-install pip setuptools wheel
 }
 
 install-py-dev() {
@@ -109,28 +90,14 @@ install-py-dev() {
     cd "${HERE}/.." || exit
 
     echo "--> Installing Sentry (for development)"
-    if query-apple-m1; then
-        # This installs pyscopg-binary2 since there's no arm64 wheel
-        # This saves having to install postgresql on the Developer's machine + using flags
-        # https://github.com/psycopg/psycopg2/issues/1286
-        pip install https://storage.googleapis.com/python-arm64-wheels/psycopg2_binary-2.8.6-cp38-cp38-macosx_11_0_arm64.whl
-        # The CPATH is needed for confluent-kakfa --> https://github.com/confluentinc/confluent-kafka-python/issues/1190
-        export CPATH="$(brew --prefix librdkafka)/include"
-        # The LDFLAGS is needed for uWSGI --> https://github.com/unbit/uwsgi/issues/2361
-        export LDFLAGS="-L$(brew --prefix gettext)/lib"
-    fi
+
+    # pip doesn't do well with swapping drop-ins
+    pip uninstall -qqy uwsgi
 
     # SENTRY_LIGHT_BUILD=1 disables webpacking during setup.py.
     # Webpacked assets are only necessary for devserver (which does it lazily anyways)
     # and acceptance tests, which webpack automatically if run.
-    SENTRY_LIGHT_BUILD=1 pip install -e '.[dev]'
-    patch-selenium
-}
-
-patch-selenium() {
-    # XXX: getsentry repo calls this!
-    # This hack is until we can upgrade to a newer version of Selenium
-    python -S -m tools.patch_selenium
+    SENTRY_LIGHT_BUILD=1 pip-install -e '.[dev]'
 }
 
 setup-git-config() {
@@ -141,6 +108,14 @@ setup-git-config() {
 
 setup-git() {
     setup-git-config
+
+    # if hooks are explicitly turned off do nothing
+    if [[ "$(git config core.hooksPath)" == '/dev/null' ]]; then
+        echo "--> core.hooksPath set to /dev/null. Skipping git hook setup"
+        echo ""
+        return
+    fi
+
     echo "--> Installing git hooks"
     mkdir -p .git/hooks && cd .git/hooks && ln -sf ../../config/hooks/* ./ && cd - || exit
     # shellcheck disable=SC2016
@@ -149,7 +124,7 @@ setup-git() {
         exit 1
     )
     if ! require pre-commit; then
-        pip install -r requirements-dev.txt
+        pip-install -r requirements-dev.txt
     fi
     pre-commit install --install-hooks
     echo ""
@@ -203,6 +178,7 @@ apply-migrations() {
 }
 
 create-user() {
+    echo "--> Creating a superuser account"
     if [[ -n "${GITHUB_ACTIONS+x}" ]]; then
         sentry createuser --superuser --email foo@tbd.com --no-password --no-input
     else
@@ -213,6 +189,8 @@ create-user() {
 build-platform-assets() {
     echo "--> Building platform assets"
     echo "from sentry.utils.integrationdocs import sync_docs; sync_docs(quiet=True)" | sentry exec
+    # make sure this didn't silently do nothing
+    test -f src/sentry/integration-docs/android.json
 }
 
 bootstrap() {
@@ -248,15 +226,15 @@ reset-db() {
     drop-db
     create-db
     apply-migrations
-    # This ensures that your set up as some data inside of it
-    bin/load-mocks
+    create-user
+    echo "Finished resetting database. To load mock data, run `./bin/load-mocks`"
 }
 
 prerequisites() {
     if [ -z "${CI+x}" ]; then
         brew update -q && brew bundle -q
     else
-        HOMEBREW_NO_AUTO_UPDATE=on brew install libxmlsec1 pyenv
+        HOMEBREW_NO_AUTO_UPDATE=on brew install pyenv
     fi
 }
 

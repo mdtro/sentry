@@ -25,6 +25,18 @@ register("system.secret-key", flags=FLAG_NOSTORE)
 # Absolute URL to the sentry root directory. Should not include a trailing slash.
 register("system.url-prefix", ttl=60, grace=3600, flags=FLAG_REQUIRED | FLAG_PRIORITIZE_DISK)
 register("system.internal-url-prefix", flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
+register("system.base-hostname", flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK | FLAG_NOSTORE)
+register(
+    "system.organization-base-hostname",
+    flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK | FLAG_NOSTORE,
+)
+register(
+    "system.organization-url-template", flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK | FLAG_NOSTORE
+)
+register(
+    "system.region-api-url-template", flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK | FLAG_NOSTORE
+)
+register("system.region", flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK | FLAG_NOSTORE)
 register("system.root-api-key", flags=FLAG_PRIORITIZE_DISK)
 register("system.logging-format", default=LoggingFormat.HUMAN, flags=FLAG_NOSTORE)
 # This is used for the chunk upload endpoint
@@ -75,15 +87,44 @@ register("mail.reply-hostname", default="", flags=FLAG_ALLOW_EMPTY | FLAG_PRIORI
 register("mail.mailgun-api-key", default="", flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
 register("mail.timeout", default=10, type=Int, flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
 
+# TOTP (Auth app)
+register(
+    "totp.disallow-new-enrollment",
+    default=False,
+    type=Bool,
+    flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK,
+)
+
 # SMS
 register("sms.twilio-account", default="", flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
 register("sms.twilio-token", default="", flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
 register("sms.twilio-number", default="", flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
+register(
+    "sms.disallow-new-enrollment",
+    default=False,
+    type=Bool,
+    flags=FLAG_ALLOW_EMPTY,
+)
 
 # U2F
 register("u2f.app-id", default="", flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
 register("u2f.facets", default=(), type=Sequence, flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
+register(
+    "u2f.disallow-new-enrollment",
+    default=False,
+    type=Bool,
+    flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK,
+)
 
+# Recovery Codes
+register(
+    "recovery.disallow-new-enrollment",
+    default=False,
+    type=Bool,
+    flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK,
+)
+
+# Auth
 register("auth.ip-rate-limit", default=0, flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
 register("auth.user-rate-limit", default=0, flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
 register(
@@ -91,6 +132,7 @@ register(
     default=False,
     flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK | FLAG_REQUIRED,
 )
+
 
 register("api.rate-limit.org-create", default=5, flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
 
@@ -307,6 +349,9 @@ register("processing.can-use-scrubbers", default=True)
 # Note: A value that is neither 0 nor 1 is regarded as 0
 register("store.use-relay-dsn-sample-rate", default=1)
 
+# A rate to apply to any events denoted as experimental to be sent to an experimental dsn.
+register("store.use-experimental-dsn-sample-rate", default=0.0)
+
 # Mock out integrations and services for tests
 register("mocks.jira", default=False)
 
@@ -357,14 +402,26 @@ register("processing.use-release-archives-sample-rate", default=0.0)  # unused
 # All Relay options (statically authenticated Relays can be registered here)
 register("relay.static_auth", default={}, flags=FLAG_NOSTORE)
 
+# Tell Relay to stop extracting metrics from transaction payloads (see killswitches)
+# Example value: [{"project_id": 42}, {"project_id": 123}]
+register("relay.drop-transaction-metrics", default=[])
+
+# Sample rate for opting in orgs into transaction metrics extraction.
+# NOTE: If this value is > 0.0, the extraction feature will be enabled for the
+#       given fraction of orgs even if the corresponding feature flag is disabled.
+register("relay.transaction-metrics-org-sample-rate", default=0.0)
+
+# Sample rate for opting in orgs into the new transaction name handling.
+# old behavior: Treat transactions from old SDKs as high-cardinality.
+# new behavior: Treat transactions from old SDKs as low-cardinality, except for browser JS.
+register("relay.transaction-names-client-based", default=0.0)
+
 # Write new kafka headers in eventstream
-register("eventstream:kafka-headers", default=False)
+register("eventstream:kafka-headers", default=True)
 
 # Post process forwarder options
 # Gets data from Kafka headers
-register("post-process-forwarder:kafka-headers", default=False)
-# Number of threads to use for post processing
-register("post-process-forwarder:concurrency", default=1)
+register("post-process-forwarder:kafka-headers", default=True)
 
 # Subscription queries sampling rate
 register("subscriptions-query.sample-rate", default=0.01)
@@ -374,11 +431,6 @@ register("subscriptions-query.sample-rate", default=0.01)
 # This is to allow gradual rollout of metrics collection for symbolication requests and can be
 # removed once it is fully rolled out.
 register("symbolicate-event.low-priority.metrics.submission-rate", default=0.0)
-
-# This is to enable the ingestion of suspect spans by project ids.
-register("performance.suspect-spans-ingestion-projects", default={})
-# This is to enable the ingestion of suspect spans by project groups.
-register("performance.suspect-spans-ingestion.rollout-rate", default=0)
 
 # Sampling rate for controlled rollout of a change where ignest-consumer spawns
 # special save_event task for transactions avoiding the preprocess.
@@ -392,14 +444,97 @@ register("reprocessing2.drop-delete-old-primary-hash", default=[])
 # e.g. [{"project_id": 2, "message_type": "error"}, {"project_id": 3, "message_type": "transaction"}]
 register("kafka.send-project-events-to-random-partitions", default=[])
 
-# Rate to project_configs_v3
+# Rate to project_configs_v3, no longer used.
 register("relay.project-config-v3-enable", default=0.0)
 
-# Mechanism for dialing up the last-seen-updater, which isn't needed outside
-# of SaaS (last_seen is a marker for deleting stale customer data)
-register("sentry-metrics.last-seen-updater.accept-rate", default=0.0)
+# [Unused] Use zstandard compression in redis project config cache
+# Set this value to a list of DSNs.
+register("relay.project-config-cache-compress", default=[])  # unused
+
+# [Unused] Use zstandard compression in redis project config cache
+# Set this value of the fraction of config writes you want to compress.
+register("relay.project-config-cache-compress-sample-rate", default=0.0)  # unused
 
 # default brownout crontab for api deprecations
 register("api.deprecation.brownout-cron", default="0 12 * * *", type=String)
 # Brownout duration to be stored in ISO8601 format for durations (See https://en.wikipedia.org/wiki/ISO_8601#Durations)
 register("api.deprecation.brownout-duration", default="PT1M")
+
+# Flag to determine whether performance metrics indexer should index tag
+# values or not
+register("sentry-metrics.performance.index-tag-values", default=True)
+
+# Global and per-organization limits on the writes to the string indexer's DB.
+#
+# Format is a list of dictionaries of format {
+#   "window_seconds": ...,
+#   "granularity_seconds": ...,
+#   "limit": ...
+# }
+#
+# See sentry.ratelimiters.sliding_windows for an explanation of what each of
+# those terms mean.
+#
+# Note that changing either window or granularity_seconds of a limit will
+# effectively reset it, as the previous data can't/won't be converted.
+register("sentry-metrics.writes-limiter.limits.performance.per-org", default=[])
+register("sentry-metrics.writes-limiter.limits.releasehealth.per-org", default=[])
+register("sentry-metrics.writes-limiter.limits.performance.global", default=[])
+register("sentry-metrics.writes-limiter.limits.releasehealth.global", default=[])
+
+# per-organization limits on the number of timeseries that can be observed in
+# each window.
+#
+# Format is a list of dictionaries of format {
+#   "window_seconds": ...,
+#   "granularity_seconds": ...,
+#   "limit": ...
+# }
+#
+# See sentry.ratelimiters.cardinality for an explanation of what each of
+# those terms mean.
+#
+# Note that changing either window or granularity_seconds of a limit will
+# effectively reset it, as the previous data can't/won't be converted.
+register("sentry-metrics.cardinality-limiter.limits.performance.per-org", default=[])
+register("sentry-metrics.cardinality-limiter.limits.releasehealth.per-org", default=[])
+register("sentry-metrics.cardinality-limiter.orgs-rollout-rate", default=0.0)
+
+# Performance issue options to change both detection (which we can monitor with metrics),
+# and the creation of performance problems, which will eventually get turned into issues.
+register("performance.issues.all.problem-detection", default=0.0)
+register("performance.issues.all.problem-creation", default=0.0)
+register(
+    "performance.issues.all.early-adopter-rollout", default=0.0
+)  # Only used for EA rollout, bound to the feature flag handler for performance-issue-ingest
+register(
+    "performance.issues.all.general-availability-rollout", default=0.0
+)  # Only used for GA rollout, bound to the feature flag handler for performance-issue-ingest
+register(
+    "performance.issues.all.post-process-group-early-adopter-rollout", default=0.0
+)  # EA rollout for processing transactions in post_process_group
+register(
+    "performance.issues.all.post-process-group-ga-rollout", default=0.0
+)  # GA rollout for processing transactions in post_process_group
+
+# Individual system-wide options in case we need to turn off specific detectors for load concerns, ignoring the set project options.
+register("performance.issues.n_plus_one_db.problem-detection", default=0.0)
+register("performance.issues.n_plus_one_db.problem-creation", default=0.0)
+register("performance.issues.n_plus_one_db_ext.problem-creation", default=0.0)
+
+# System-wide options for default performance detection settings for any org opted into the performance-issues-ingest feature. Meant for rollout.
+register("performance.issues.n_plus_one_db.count_threshold", default=5)
+register("performance.issues.n_plus_one_db.duration_threshold", default=100.0)
+
+# Dynamic Sampling system wide options
+# Killswitch to disable new dynamic sampling behavior specifically new dynamic sampling biases
+register("dynamic-sampling:enabled-biases", default=True)
+# System-wide options that observes latest releases on transactions and caches these values to be used later in
+# project config computation. This is temporary option to monitor the performance of this feature.
+register("dynamic-sampling:boost-latest-release", default=False)
+
+# Controls whether we should attempt to derive code mappings for projects during post processing.
+register("post_process.derive-code-mappings", default=True)
+# Allows adjusting the percentage of orgs we test under the dry run mode
+register("derive-code-mappings.dry-run.early-adopter-rollout", default=0.0)
+register("derive-code-mappings.dry-run.general-availability-rollout", default=0.0)

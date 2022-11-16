@@ -22,6 +22,9 @@ GUIDES = {
     "release_stages": 23,
     "new_page_filters": 24,
     "new_page_filters_pin": 25,
+    "releases_widget": 26,
+    "activate_sampling_rule": 27,
+    "create_conditional_rule": 28,
 }
 
 # demo mode has different guides
@@ -35,4 +38,13 @@ if settings.DEMO_MODE:
         "discover_landing": 25,
         "discover_event_view": 26,
         "transaction_details": 27,
+        "sidebar_v2": 28,
+        "issues_v3": 29,
+        "releases_v2": 30,
+        "react-native-release": 31,
+        "release-details_v2": 32,
+        "performance": 33,
+        "transaction_summary": 34,
+        "transaction_details_v2": 35,
+        "issue_stream_v3": 36,
     }

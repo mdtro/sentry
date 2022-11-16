@@ -1,12 +1,15 @@
 import copy
 import time
+from functools import partial
 from operator import itemgetter
 from unittest.mock import patch
 
+import pytest
 from django.urls import reverse
 
 from sentry.models import ApiToken
 from sentry.sentry_metrics import indexer
+from sentry.sentry_metrics.configuration import UseCaseKey
 from sentry.snuba.metrics import TransactionStatusTagValue, TransactionTagsKey
 from sentry.snuba.metrics.fields import (
     DERIVED_METRICS,
@@ -18,6 +21,7 @@ from sentry.snuba.metrics.naming_layer.mapping import get_public_name_from_mri
 from sentry.snuba.metrics.naming_layer.mri import SessionMRI, TransactionMRI
 from sentry.testutils import APITestCase
 from sentry.testutils.cases import OrganizationMetricMetaIntegrationTestCase
+from sentry.testutils.silo import region_silo_test
 
 MOCKED_DERIVED_METRICS = copy.deepcopy(DERIVED_METRICS)
 MOCKED_DERIVED_METRICS.update(
@@ -36,11 +40,22 @@ MOCKED_DERIVED_METRICS.update(
     }
 )
 
+pytestmark = pytest.mark.sentry_metrics
+
 
 def mocked_mri_resolver(metric_names, mri_func):
     return lambda x: x if x in metric_names else mri_func(x)
 
 
+def indexer_record(use_case_id: UseCaseKey, org_id: int, string: str) -> int:
+    return indexer.record(use_case_id=use_case_id, org_id=org_id, string=string)
+
+
+perf_indexer_record = partial(indexer_record, UseCaseKey.PERFORMANCE)
+rh_indexer_record = partial(indexer_record, UseCaseKey.RELEASE_HEALTH)
+
+
+@region_silo_test
 class OrganizationMetricsPermissionTest(APITestCase):
 
     endpoints = (
@@ -69,14 +84,8 @@ class OrganizationMetricsPermissionTest(APITestCase):
             response = self.send_get_request(token, *endpoint)
             assert response.status_code in (200, 400, 404)
 
-    def test_feature_flag(self):
-        token = ApiToken.objects.create(user=self.user, scope_list=["org:read"])
 
-        for endpoint in self.endpoints:
-            response = self.send_get_request(token, *endpoint)
-            assert response.status_code == 404
-
-
+@region_silo_test
 class OrganizationMetricsIndexIntegrationTest(OrganizationMetricMetaIntegrationTestCase):
 
     endpoint = "sentry-api-0-organization-metrics-index"
@@ -214,12 +223,15 @@ class OrganizationMetricsIndexIntegrationTest(OrganizationMetricMetaIntegrationT
     def test_metrics_index_transaction_derived_metrics(self):
         user_ts = time.time()
         org_id = self.organization.id
-        tx_metric = indexer.record(org_id, TransactionMRI.DURATION.value)
-        tx_status = indexer.record(org_id, TransactionTagsKey.TRANSACTION_STATUS.value)
-        tx_satisfaction = indexer.record(
+        tx_duration_metric = perf_indexer_record(org_id, TransactionMRI.DURATION.value)
+        # TODO: check that this is correct, because APDEX is the only derived metric that has either DURATION or LCP
+        #  in the required metrics.
+        tx_lcp_metric = perf_indexer_record(org_id, TransactionMRI.MEASUREMENTS_LCP.value)
+        tx_status = perf_indexer_record(org_id, TransactionTagsKey.TRANSACTION_STATUS.value)
+        tx_satisfaction = perf_indexer_record(
             self.organization.id, TransactionTagsKey.TRANSACTION_SATISFACTION.value
         )
-        tx_user_metric = indexer.record(self.organization.id, TransactionMRI.USER.value)
+        tx_user_metric = perf_indexer_record(self.organization.id, TransactionMRI.USER.value)
 
         self._send_buckets(
             [
@@ -229,7 +241,7 @@ class OrganizationMetricsIndexIntegrationTest(OrganizationMetricMetaIntegrationT
                     "metric_id": tx_user_metric,
                     "timestamp": user_ts,
                     "tags": {
-                        tx_satisfaction: indexer.record(
+                        tx_satisfaction: perf_indexer_record(
                             self.organization.id, TransactionSatisfactionTagValue.FRUSTRATED.value
                         ),
                     },
@@ -243,10 +255,10 @@ class OrganizationMetricsIndexIntegrationTest(OrganizationMetricMetaIntegrationT
                     "metric_id": tx_user_metric,
                     "timestamp": user_ts,
                     "tags": {
-                        tx_satisfaction: indexer.record(
+                        tx_satisfaction: perf_indexer_record(
                             self.organization.id, TransactionSatisfactionTagValue.SATISFIED.value
                         ),
-                        tx_status: indexer.record(
+                        tx_status: perf_indexer_record(
                             self.organization.id, TransactionStatusTagValue.CANCELLED.value
                         ),
                     },
@@ -262,13 +274,30 @@ class OrganizationMetricsIndexIntegrationTest(OrganizationMetricMetaIntegrationT
                 {
                     "org_id": self.organization.id,
                     "project_id": self.transaction_proj.id,
-                    "metric_id": tx_metric,
+                    "metric_id": tx_duration_metric,
                     "timestamp": user_ts,
                     "tags": {
-                        tx_satisfaction: indexer.record(
+                        tx_satisfaction: perf_indexer_record(
                             self.organization.id, TransactionSatisfactionTagValue.TOLERATED.value
                         ),
-                        tx_status: indexer.record(
+                        tx_status: perf_indexer_record(
+                            self.organization.id, TransactionStatusTagValue.OK.value
+                        ),
+                    },
+                    "type": "d",
+                    "value": [0.3],
+                    "retention_days": 90,
+                },
+                {
+                    "org_id": self.organization.id,
+                    "project_id": self.transaction_proj.id,
+                    "metric_id": tx_lcp_metric,
+                    "timestamp": user_ts,
+                    "tags": {
+                        tx_satisfaction: perf_indexer_record(
+                            self.organization.id, TransactionSatisfactionTagValue.SATISFIED.value
+                        ),
+                        tx_status: perf_indexer_record(
                             self.organization.id, TransactionStatusTagValue.OK.value
                         ),
                     },
@@ -304,14 +333,39 @@ class OrganizationMetricsIndexIntegrationTest(OrganizationMetricMetaIntegrationT
                         "p90",
                         "p95",
                         "p99",
+                        "sum",
                     ],
                     "unit": None,
+                },
+                {
+                    "name": "transaction.failure_count",
+                    "operations": [],
+                    "type": "numeric",
+                    "unit": "transactions",
                 },
                 {
                     "name": "transaction.failure_rate",
                     "type": "numeric",
                     "operations": [],
                     "unit": "transactions",
+                },
+                {
+                    "name": "transaction.measurements.lcp",
+                    "operations": [
+                        "avg",
+                        "count",
+                        "histogram",
+                        "max",
+                        "min",
+                        "p50",
+                        "p75",
+                        "p90",
+                        "p95",
+                        "p99",
+                        "sum",
+                    ],
+                    "type": "distribution",
+                    "unit": None,
                 },
                 {
                     "name": "transaction.miserable_user",

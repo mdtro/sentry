@@ -8,10 +8,17 @@ from typing import Any, Callable, Iterable, List, Mapping, MutableMapping, Seque
 from django.core.cache import cache
 from django.utils import timezone
 
-from sentry import analytics
-from sentry.eventstore.models import Event
+from sentry import analytics, features
+from sentry.eventstore.models import GroupEvent
+from sentry.mail.actions import NotifyActiveReleaseEmailAction
 from sentry.models import GroupRuleStatus, Rule
+from sentry.notifications.types import ActionTargetType
 from sentry.rules import EventState, history, rules
+from sentry.rules.actions import EventAction
+from sentry.rules.base import CallbackFuture
+from sentry.rules.conditions.active_release import ActiveReleaseEventCondition
+from sentry.rules.conditions.base import EventCondition
+from sentry.rules.filters.base import EventFilter
 from sentry.types.rules import RuleFuture
 from sentry.utils.hashlib import hash_values
 from sentry.utils.safe import safe_execute
@@ -19,12 +26,22 @@ from sentry.utils.safe import safe_execute
 SLOW_CONDITION_MATCHES = ["event_frequency"]
 
 
+def get_match_function(match_name: str) -> Callable[..., bool] | None:
+    if match_name == "all":
+        return all
+    elif match_name == "any":
+        return any
+    elif match_name == "none":
+        return lambda bool_iter: not any(bool_iter)
+    return None
+
+
 class RuleProcessor:
     logger = logging.getLogger("sentry.rules")
 
     def __init__(
         self,
-        event: Event,
+        event: GroupEvent,
         is_new: bool,
         is_regression: bool,
         is_new_group_environment: bool,
@@ -40,7 +57,7 @@ class RuleProcessor:
         self.has_reappeared = has_reappeared
 
         self.grouped_futures: MutableMapping[
-            str, Tuple[Callable[[Event, Sequence[RuleFuture]], None], List[RuleFuture]]
+            str, Tuple[Callable[[GroupEvent, Sequence[RuleFuture]], None], List[RuleFuture]]
         ] = {}
 
     def get_rules(self) -> Sequence[Rule]:
@@ -140,15 +157,6 @@ class RuleProcessor:
             has_reappeared=self.has_reappeared,
         )
 
-    def get_match_function(self, match_name: str) -> Callable[..., bool] | None:
-        if match_name == "all":
-            return all
-        elif match_name == "any":
-            return any
-        elif match_name == "none":
-            return lambda bool_iter: not any(bool_iter)
-        return None
-
     def apply_rule(self, rule: Rule, status: GroupRuleStatus) -> None:
         """
         If all conditions and filters pass, execute every action.
@@ -196,7 +204,7 @@ class RuleProcessor:
             if not predicate_list:
                 continue
             predicate_iter = (self.condition_matches(f, state, rule) for f in predicate_list)
-            predicate_func = self.get_match_function(match)
+            predicate_func = get_match_function(match)
             if predicate_func:
                 if not predicate_func(predicate_iter):
                     return
@@ -224,8 +232,11 @@ class RuleProcessor:
                 rule_id=rule.id,
             )
 
-        history.record(rule, self.group)
+        history.record(rule, self.group, self.event.event_id)
+        self.activate_downstream_actions(rule)
 
+    def activate_downstream_actions(self, rule: Rule) -> None:
+        state = self.get_state()
         for action in rule.data.get("actions", ()):
             action_cls = rules.get(action["id"])
             if action_cls is None:
@@ -249,7 +260,72 @@ class RuleProcessor:
                 else:
                     self.grouped_futures[key][1].append(rule_future)
 
-    def apply(self) -> Iterable[Any]:
+    def _get_active_release_rule_actions(self) -> Sequence[EventAction]:
+        # TODO: we need this to be configurable on a pre-project level?
+        return [
+            NotifyActiveReleaseEmailAction(
+                project=self.project, data={"targetType": ActionTargetType.RELEASE_MEMBERS.value}
+            )
+        ]
+
+    def apply_active_release_rule(
+        self,
+        conditions: Sequence[EventCondition],
+        filters: Sequence[EventFilter],
+        actions: Sequence[EventAction],
+        action_frequency_minutes: int,
+        predicate_eval_frequency_minutes: int,
+    ) -> None:
+        now = timezone.now()
+        freq_offset = now - timedelta(minutes=action_frequency_minutes)
+        predicate_freq_offset = now - timedelta(minutes=predicate_eval_frequency_minutes)
+        last_action_cache_key = "{}:p-{}:g-{}".format(
+            "active-release-last-action", self.event.project_id, self.event.group_id
+        )
+        last_eval_cache_key = "{}:p-{}:g-{}".format(
+            "active-release-last-eval", self.event.project_id, self.event.group_id
+        )
+
+        bulk = cache.get_many([last_action_cache_key, last_eval_cache_key])
+        last_action_time = bulk.get(last_action_cache_key) if bulk else None
+        last_eval_time = bulk.get(last_eval_cache_key) if bulk else None
+
+        if last_action_time and last_action_time > freq_offset:
+            return
+
+        if last_eval_time and last_eval_time > predicate_freq_offset:
+            return
+
+        state = self.get_state()
+
+        cache.set(last_eval_cache_key, now, 60)
+        if not all(
+            safe_execute(f.passes, event=self.event, state=state, _with_transaction=False)
+            for f in (filters or ())
+        ):
+            return
+
+        if not all(
+            safe_execute(c.passes, event=self.event, state=state, _with_transaction=False)
+            for c in conditions or ()
+        ):
+            return
+
+        cache.set(last_action_cache_key, now, 60)
+
+        for action in actions or ():
+            results: Sequence[CallbackFuture] = safe_execute(
+                action.after,
+                event=self.event,
+                state=state,
+                _with_transaction=False,
+            )
+            for future in results or ():
+                safe_execute(future.callback, self.event, None, _with_transaction=False)
+
+    def apply(
+        self,
+    ) -> Iterable[Tuple[Callable[[GroupEvent, Sequence[RuleFuture]], None], List[RuleFuture]]]:
         # we should only apply rules on unresolved issues
         if not self.event.group.is_unresolved():
             return {}.values()
@@ -259,4 +335,16 @@ class RuleProcessor:
         rule_statuses = self.bulk_get_rule_status(rules)
         for rule in rules:
             self.apply_rule(rule, rule_statuses[rule.id])
+
+        if features.has(
+            "organizations:active-release-notifications-enable", self.project.organization
+        ):
+            self.apply_active_release_rule(
+                [ActiveReleaseEventCondition(project=self.project)],
+                [],
+                self._get_active_release_rule_actions(),
+                1,
+                1,
+            )
+
         return self.grouped_futures.values()

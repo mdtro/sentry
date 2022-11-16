@@ -1,7 +1,6 @@
 import {cloneElement, Component, isValidElement} from 'react';
 import {browserHistory, PlainRoute, RouteComponentProps} from 'react-router';
 import styled from '@emotion/styled';
-import cloneDeep from 'lodash/cloneDeep';
 import isEqual from 'lodash/isEqual';
 import omit from 'lodash/omit';
 
@@ -11,10 +10,7 @@ import {
   updateDashboard,
 } from 'sentry/actionCreators/dashboards';
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
-import {
-  openAddDashboardWidgetModal,
-  openWidgetViewerModal,
-} from 'sentry/actionCreators/modal';
+import {openWidgetViewerModal} from 'sentry/actionCreators/modal';
 import {Client} from 'sentry/api';
 import Breadcrumbs from 'sentry/components/breadcrumbs';
 import DatePageFilter from 'sentry/components/datePageFilter';
@@ -30,15 +26,32 @@ import PageFilterBar from 'sentry/components/organizations/pageFilterBar';
 import PageFiltersContainer from 'sentry/components/organizations/pageFilters/container';
 import ProjectPageFilter from 'sentry/components/projectPageFilter';
 import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
+import {usingCustomerDomain} from 'sentry/constants';
 import {t} from 'sentry/locale';
 import {PageContent} from 'sentry/styles/organization';
 import space from 'sentry/styles/space';
-import {Organization} from 'sentry/types';
+import {Organization, Project} from 'sentry/types';
 import {defined} from 'sentry/utils';
-import {trackAnalyticsEvent} from 'sentry/utils/analytics';
 import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+import EventView from 'sentry/utils/discover/eventView';
+import {MetricsCardinalityProvider} from 'sentry/utils/performance/contexts/metricsCardinality';
+import {MEPSettingProvider} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
 import withApi from 'sentry/utils/withApi';
 import withOrganization from 'sentry/utils/withOrganization';
+import withProjects from 'sentry/utils/withProjects';
+import {
+  cloneDashboard,
+  getCurrentPageFilters,
+  getDashboardFiltersFromURL,
+  hasUnsavedFilterChanges,
+  isWidgetUsingTransactionName,
+  resetPageFilters,
+} from 'sentry/views/dashboardsV2/utils';
+import {MetricsDataSwitcherAlert} from 'sentry/views/performance/landing/metricsDataSwitcherAlert';
+
+import {generatePerformanceEventView} from '../performance/data';
+import {MetricsDataSwitcher} from '../performance/landing/metricsDataSwitcher';
+import {DiscoverQueryPageSource} from '../performance/utils';
 
 import {
   WidgetViewerContext,
@@ -47,6 +60,7 @@ import {
 import Controls from './controls';
 import Dashboard from './dashboard';
 import {DEFAULT_STATS_PERIOD} from './data';
+import FiltersBar from './filtersBar';
 import {
   assignDefaultLayout,
   calculateColumnDepths,
@@ -55,6 +69,8 @@ import {
 import DashboardTitle from './title';
 import {
   DashboardDetails,
+  DashboardFilterKeys,
+  DashboardFilters,
   DashboardListItem,
   DashboardState,
   DashboardWidgetSource,
@@ -62,9 +78,12 @@ import {
   Widget,
   WidgetType,
 } from './types';
-import {cloneDashboard} from './utils';
 
 const UNSAVED_MESSAGE = t('You have unsaved changes, are you sure you want to leave?');
+
+export const UNSAVED_FILTERS_MESSAGE = t(
+  'You have unsaved dashboard filters. You can save or discard them.'
+);
 
 const HookHeader = HookOrDefault({hookName: 'component:dashboards-header'});
 
@@ -81,6 +100,7 @@ type Props = RouteComponentProps<RouteParams, {}> & {
   dashboards: DashboardListItem[];
   initialState: DashboardState;
   organization: Organization;
+  projects: Project[];
   route: PlainRoute;
   newWidget?: Widget;
   onDashboardUpdate?: (updatedDashboard: DashboardDetails) => void;
@@ -131,7 +151,8 @@ class DashboardDetail extends Component<Props, State> {
       location,
       router,
     } = this.props;
-    const {seriesData, tableData, issuesData, pageLinks, totalIssuesCount} = this.state;
+    const {seriesData, tableData, pageLinks, totalIssuesCount, seriesResultsType} =
+      this.state;
     if (isWidgetViewerPath(location.pathname)) {
       const widget =
         defined(widgetId) &&
@@ -142,8 +163,8 @@ class DashboardDetail extends Component<Props, State> {
           organization,
           widget,
           seriesData,
+          seriesResultsType,
           tableData,
-          issuesData,
           pageLinks,
           totalIssuesCount,
           onClose: () => {
@@ -155,35 +176,17 @@ class DashboardDetail extends Component<Props, State> {
             });
           },
           onEdit: () => {
-            if (
-              organization.features.includes('new-widget-builder-experience-design') &&
-              !organization.features.includes(
-                'new-widget-builder-experience-modal-access'
-              )
-            ) {
-              const widgetIndex = dashboard.widgets.indexOf(widget);
-              if (dashboardId) {
-                router.push({
-                  pathname: `/organizations/${organization.slug}/dashboard/${dashboardId}/widget/${widgetIndex}/edit/`,
-                  query: {
-                    ...location.query,
-                    source: DashboardWidgetSource.DASHBOARDS,
-                  },
-                });
-                return;
-              }
+            const widgetIndex = dashboard.widgets.indexOf(widget);
+            if (dashboardId) {
+              router.push({
+                pathname: `/organizations/${organization.slug}/dashboard/${dashboardId}/widget/${widgetIndex}/edit/`,
+                query: {
+                  ...location.query,
+                  source: DashboardWidgetSource.DASHBOARDS,
+                },
+              });
+              return;
             }
-            openAddDashboardWidgetModal({
-              organization,
-              widget,
-              onUpdateWidget: (nextWidget: Widget) => {
-                const updateIndex = dashboard.widgets.indexOf(widget);
-                const nextWidgetsList = cloneDeep(dashboard.widgets);
-                nextWidgetsList[updateIndex] = nextWidget;
-                this.handleUpdateWidgetList(nextWidgetsList);
-              },
-              source: DashboardWidgetSource.DASHBOARDS,
-            });
           },
         });
         trackAdvancedAnalyticsEvent('dashboards_views.widget_viewer.open', {
@@ -240,6 +243,18 @@ class DashboardDetail extends Component<Props, State> {
       `/organizations/${organization.slug}/dashboard/${dashboardId}/widget/${widgetIndex}/edit/`,
     ];
 
+    if (usingCustomerDomain) {
+      // TODO: replace with url generation later on.
+      widgetBuilderRoutes.push(
+        ...[
+          `/dashboards/new/widget/new/`,
+          `/dashboard/${dashboardId}/widget/new/`,
+          `/dashboards/new/widget/${widgetIndex}/edit/`,
+          `/dashboard/${dashboardId}/widget/${widgetIndex}/edit/`,
+        ]
+      );
+    }
+
     return widgetBuilderRoutes.includes(location.pathname);
   }
 
@@ -250,13 +265,8 @@ class DashboardDetail extends Component<Props, State> {
   }
 
   onEdit = () => {
-    const {dashboard} = this.props;
-
-    trackAnalyticsEvent({
-      eventKey: 'dashboards2.edit.start',
-      eventName: 'Dashboards2: Edit start',
-      organization_id: parseInt(this.props.organization.id, 10),
-    });
+    const {dashboard, organization} = this.props;
+    trackAdvancedAnalyticsEvent('dashboards2.edit.start', {organization});
 
     this.setState({
       dashboardState: DashboardState.EDIT,
@@ -311,11 +321,7 @@ class DashboardDetail extends Component<Props, State> {
       deleteDashboard(api, organization.slug, dashboard.id)
         .then(() => {
           addSuccessMessage(t('Dashboard deleted'));
-          trackAnalyticsEvent({
-            eventKey: 'dashboards2.delete',
-            eventName: 'Dashboards2: Delete',
-            organization_id: parseInt(this.props.organization.id, 10),
-          });
+          trackAdvancedAnalyticsEvent('dashboards2.delete', {organization});
           browserHistory.replace({
             pathname: `/organizations/${organization.slug}/dashboards/`,
             query: location.query,
@@ -357,26 +363,47 @@ class DashboardDetail extends Component<Props, State> {
       }
     }
     if (params.dashboardId) {
-      trackAnalyticsEvent({
-        eventKey: 'dashboards2.edit.cancel',
-        eventName: 'Dashboards2: Edit cancel',
-        organization_id: parseInt(this.props.organization.id, 10),
-      });
+      trackAdvancedAnalyticsEvent('dashboards2.edit.cancel', {organization});
       this.setState({
         dashboardState: DashboardState.VIEW,
         modifiedDashboard: null,
       });
       return;
     }
-    trackAnalyticsEvent({
-      eventKey: 'dashboards2.create.cancel',
-      eventName: 'Dashboards2: Create cancel',
-      organization_id: parseInt(this.props.organization.id, 10),
-    });
+    trackAdvancedAnalyticsEvent('dashboards2.create.cancel', {organization});
     browserHistory.replace({
       pathname: `/organizations/${organization.slug}/dashboards/`,
       query: location.query,
     });
+  };
+
+  handleChangeFilter = (activeFilters: DashboardFilters) => {
+    const {dashboard, location} = this.props;
+    const {modifiedDashboard} = this.state;
+    const newModifiedDashboard = modifiedDashboard || dashboard;
+
+    if (
+      Object.keys(activeFilters).every(
+        key => !newModifiedDashboard.filters?.[key] && activeFilters[key].length === 0
+      )
+    ) {
+      return;
+    }
+
+    const filterParams: DashboardFilters = {};
+    Object.keys(activeFilters).forEach(key => {
+      filterParams[key] = activeFilters[key].length ? activeFilters[key] : '';
+    });
+
+    if (!isEqual(activeFilters, dashboard.filters)) {
+      browserHistory.push({
+        ...location,
+        query: {
+          ...location.query,
+          ...filterParams,
+        },
+      });
+    }
   };
 
   handleUpdateWidgetList = (widgets: Widget[]) => {
@@ -440,27 +467,16 @@ class DashboardDetail extends Component<Props, State> {
       modifiedDashboard: cloneDashboard(dashboard),
     });
 
-    if (
-      organization.features.includes('new-widget-builder-experience-design') &&
-      !organization.features.includes('new-widget-builder-experience-modal-access')
-    ) {
-      if (dashboardId) {
-        router.push({
-          pathname: `/organizations/${organization.slug}/dashboard/${dashboardId}/widget/new/`,
-          query: {
-            ...location.query,
-            source: DashboardWidgetSource.DASHBOARDS,
-          },
-        });
-        return;
-      }
+    if (dashboardId) {
+      router.push({
+        pathname: `/organizations/${organization.slug}/dashboard/${dashboardId}/widget/new/`,
+        query: {
+          ...location.query,
+          source: DashboardWidgetSource.DASHBOARDS,
+        },
+      });
+      return;
     }
-    openAddDashboardWidgetModal({
-      organization,
-      dashboard,
-      onAddLibraryWidget: (widgets: Widget[]) => this.handleUpdateWidgetList(widgets),
-      source: DashboardWidgetSource.LIBRARY,
-    });
   };
 
   onCommit = () => {
@@ -479,14 +495,23 @@ class DashboardDetail extends Component<Props, State> {
               was_previewed: true,
             });
           }
-          createDashboard(api, organization.slug, modifiedDashboard, this.isPreview).then(
+          let newModifiedDashboard = modifiedDashboard;
+          if (organization.features.includes('dashboards-top-level-filter')) {
+            newModifiedDashboard = {
+              ...cloneDashboard(modifiedDashboard),
+              ...getCurrentPageFilters(location),
+              filters: getDashboardFiltersFromURL(location) ?? modifiedDashboard.filters,
+            };
+          }
+          createDashboard(
+            api,
+            organization.slug,
+            newModifiedDashboard,
+            this.isPreview
+          ).then(
             (newDashboard: DashboardDetails) => {
               addSuccessMessage(t('Dashboard created'));
-              trackAnalyticsEvent({
-                eventKey: 'dashboards2.create.complete',
-                eventName: 'Dashboards2: Create complete',
-                organization_id: parseInt(organization.id, 10),
-              });
+              trackAdvancedAnalyticsEvent('dashboards2.create.complete', {organization});
               this.setState({
                 dashboardState: DashboardState.VIEW,
               });
@@ -495,7 +520,7 @@ class DashboardDetail extends Component<Props, State> {
               browserHistory.replace({
                 pathname: `/organizations/${organization.slug}/dashboard/${newDashboard.id}/`,
                 query: {
-                  ...location.query,
+                  query: omit(location.query, Object.values(DashboardFilterKeys)),
                 },
               });
             },
@@ -520,11 +545,7 @@ class DashboardDetail extends Component<Props, State> {
                 onDashboardUpdate(newDashboard);
               }
               addSuccessMessage(t('Dashboard updated'));
-              trackAnalyticsEvent({
-                eventKey: 'dashboards2.edit.complete',
-                eventName: 'Dashboards2: Edit complete',
-                organization_id: parseInt(organization.id, 10),
-              });
+              trackAdvancedAnalyticsEvent('dashboards2.edit.complete', {organization});
               this.setState({
                 dashboardState: DashboardState.VIEW,
                 modifiedDashboard: null,
@@ -584,7 +605,7 @@ class DashboardDetail extends Component<Props, State> {
     const {modifiedDashboard} = this.state;
 
     return isValidElement(children)
-      ? cloneElement(children, {
+      ? cloneElement<any>(children, {
           dashboard: modifiedDashboard ?? dashboard,
           onSave: this.isEditing ? this.onUpdateWidget : this.handleUpdateWidgetList,
         })
@@ -598,7 +619,8 @@ class DashboardDetail extends Component<Props, State> {
 
     return (
       <PageFiltersContainer
-        hideGlobalHeader
+        desyncedAlertMessage='Using filter values saved to this dashboard. To edit saved filters, click "Edit Dashboard".'
+        hideDesyncRevertButton
         defaultSelection={{
           datetime: {
             start: null,
@@ -630,25 +652,41 @@ class DashboardDetail extends Component<Props, State> {
                 widgetLimitReached={widgetLimitReached}
               />
             </StyledPageHeader>
-            <DashboardPageFilterBar condensed>
+            <HookHeader organization={organization} />
+            <StyledPageFilterBar condensed>
               <ProjectPageFilter />
               <EnvironmentPageFilter />
               <DatePageFilter alignDropdown="left" />
-            </DashboardPageFilterBar>
-            <HookHeader organization={organization} />
-            <Dashboard
-              paramDashboardId={dashboardId}
-              dashboard={modifiedDashboard ?? dashboard}
-              organization={organization}
-              isEditing={this.isEditing}
-              widgetLimitReached={widgetLimitReached}
-              onUpdate={this.onUpdateWidget}
-              handleUpdateWidgetList={this.handleUpdateWidgetList}
-              handleAddCustomWidget={this.handleAddCustomWidget}
-              isPreview={this.isPreview}
-              router={router}
-              location={location}
-            />
+            </StyledPageFilterBar>
+            <MetricsCardinalityProvider organization={organization} location={location}>
+              <MetricsDataSwitcher
+                organization={organization}
+                eventView={EventView.fromLocation(location)}
+                location={location}
+                hideLoadingIndicator
+              >
+                {metricsDataSide => (
+                  <MEPSettingProvider
+                    location={location}
+                    forceTransactions={metricsDataSide.forceTransactionsOnly}
+                  >
+                    <Dashboard
+                      paramDashboardId={dashboardId}
+                      dashboard={modifiedDashboard ?? dashboard}
+                      organization={organization}
+                      isEditing={this.isEditing}
+                      widgetLimitReached={widgetLimitReached}
+                      onUpdate={this.onUpdateWidget}
+                      handleUpdateWidgetList={this.handleUpdateWidgetList}
+                      handleAddCustomWidget={this.handleAddCustomWidget}
+                      isPreview={this.isPreview}
+                      router={router}
+                      location={location}
+                    />
+                  </MEPSettingProvider>
+                )}
+              </MetricsDataSwitcher>
+            </MetricsCardinalityProvider>
           </NoProjectMessage>
         </PageContent>
       </PageFiltersContainer>
@@ -669,6 +707,7 @@ class DashboardDetail extends Component<Props, State> {
 
   renderDashboardDetail() {
     const {
+      api,
       organization,
       dashboard,
       dashboards,
@@ -677,15 +716,30 @@ class DashboardDetail extends Component<Props, State> {
       location,
       newWidget,
       onSetNewWidget,
+      onDashboardUpdate,
+      projects,
     } = this.props;
     const {modifiedDashboard, dashboardState, widgetLimitReached, seriesData, setData} =
       this.state;
     const {dashboardId} = params;
 
+    const hasUnsavedFilters =
+      organization.features.includes('dashboards-top-level-filter') &&
+      dashboard.id !== 'default-overview' &&
+      dashboardState !== DashboardState.CREATE &&
+      hasUnsavedFilterChanges(dashboard, location);
+
+    const eventView = generatePerformanceEventView(location, projects);
+
+    const isDashboardUsingTransaction = dashboard.widgets.some(
+      isWidgetUsingTransactionName
+    );
+
     return (
       <SentryDocumentTitle title={dashboard.title} orgSlug={organization.slug}>
         <PageFiltersContainer
-          hideGlobalHeader
+          desyncedAlertMessage='Using filter values saved to this dashboard. To edit saved filters, click "Edit Dashboard".'
+          hideDesyncRevertButton
           defaultSelection={{
             datetime: {
               start: null,
@@ -722,6 +776,7 @@ class DashboardDetail extends Component<Props, State> {
                   <Controls
                     organization={organization}
                     dashboards={dashboards}
+                    hasUnsavedFilters={hasUnsavedFilters}
                     onEdit={this.onEdit}
                     onCancel={this.onCancel}
                     onCommit={this.onCommit}
@@ -734,28 +789,105 @@ class DashboardDetail extends Component<Props, State> {
               </Layout.Header>
               <Layout.Body>
                 <Layout.Main fullWidth>
-                  <DashboardPageFilterBar condensed>
-                    <ProjectPageFilter />
-                    <EnvironmentPageFilter />
-                    <DatePageFilter alignDropdown="left" />
-                  </DashboardPageFilterBar>
-                  <WidgetViewerContext.Provider value={{seriesData, setData}}>
-                    <Dashboard
-                      paramDashboardId={dashboardId}
-                      dashboard={modifiedDashboard ?? dashboard}
+                  <MetricsCardinalityProvider
+                    organization={organization}
+                    location={location}
+                  >
+                    <MetricsDataSwitcher
                       organization={organization}
-                      isEditing={this.isEditing}
-                      widgetLimitReached={widgetLimitReached}
-                      onUpdate={this.onUpdateWidget}
-                      handleUpdateWidgetList={this.handleUpdateWidgetList}
-                      handleAddCustomWidget={this.handleAddCustomWidget}
-                      router={router}
+                      eventView={eventView}
                       location={location}
-                      newWidget={newWidget}
-                      onSetNewWidget={onSetNewWidget}
-                      isPreview={this.isPreview}
-                    />
-                  </WidgetViewerContext.Provider>
+                      hideLoadingIndicator
+                    >
+                      {metricsDataSide => (
+                        <MEPSettingProvider
+                          location={location}
+                          forceTransactions={metricsDataSide.forceTransactionsOnly}
+                        >
+                          {isDashboardUsingTransaction ? (
+                            <MetricsDataSwitcherAlert
+                              organization={organization}
+                              eventView={eventView}
+                              projects={projects}
+                              location={location}
+                              router={router}
+                              source={DiscoverQueryPageSource.DISCOVER}
+                              {...metricsDataSide}
+                            />
+                          ) : null}
+                          <FiltersBar
+                            filters={(modifiedDashboard ?? dashboard).filters}
+                            location={location}
+                            hasUnsavedChanges={hasUnsavedFilters}
+                            isEditingDashboard={
+                              dashboardState !== DashboardState.CREATE && this.isEditing
+                            }
+                            isPreview={this.isPreview}
+                            onDashboardFilterChange={this.handleChangeFilter}
+                            onCancel={() => {
+                              resetPageFilters(dashboard, location);
+                              this.setState({
+                                modifiedDashboard: {
+                                  ...(modifiedDashboard ?? dashboard),
+                                  filters: dashboard.filters,
+                                },
+                              });
+                            }}
+                            onSave={() => {
+                              const newModifiedDashboard = {
+                                ...cloneDashboard(modifiedDashboard ?? dashboard),
+                                ...getCurrentPageFilters(location),
+                                filters:
+                                  getDashboardFiltersFromURL(location) ??
+                                  (modifiedDashboard ?? dashboard).filters,
+                              };
+                              updateDashboard(
+                                api,
+                                organization.slug,
+                                newModifiedDashboard
+                              ).then(
+                                (newDashboard: DashboardDetails) => {
+                                  if (onDashboardUpdate) {
+                                    onDashboardUpdate(newDashboard);
+                                    this.setState({
+                                      modifiedDashboard: null,
+                                    });
+                                  }
+                                  addSuccessMessage(t('Dashboard filters updated'));
+                                  browserHistory.replace({
+                                    pathname: `/organizations/${organization.slug}/dashboard/${newDashboard.id}/`,
+                                    query: omit(
+                                      location.query,
+                                      Object.values(DashboardFilterKeys)
+                                    ),
+                                  });
+                                },
+                                () => undefined
+                              );
+                            }}
+                          />
+
+                          <WidgetViewerContext.Provider value={{seriesData, setData}}>
+                            <Dashboard
+                              paramDashboardId={dashboardId}
+                              dashboard={modifiedDashboard ?? dashboard}
+                              organization={organization}
+                              isEditing={this.isEditing}
+                              widgetLimitReached={widgetLimitReached}
+                              onUpdate={this.onUpdateWidget}
+                              handleUpdateWidgetList={this.handleUpdateWidgetList}
+                              handleAddCustomWidget={this.handleAddCustomWidget}
+                              router={router}
+                              location={location}
+                              newWidget={newWidget}
+                              onSetNewWidget={onSetNewWidget}
+                              isPreview={this.isPreview}
+                            />
+                          </WidgetViewerContext.Provider>
+                        </MEPSettingProvider>
+                      )}
+                    </MetricsDataSwitcher>
+                  </MetricsCardinalityProvider>
                 </Layout.Main>
               </Layout.Body>
             </NoProjectMessage>
@@ -802,8 +934,8 @@ const StyledPageContent = styled(PageContent)`
   padding: 0;
 `;
 
-const DashboardPageFilterBar = styled(PageFilterBar)`
+const StyledPageFilterBar = styled(PageFilterBar)`
   margin-bottom: ${space(2)};
 `;
 
-export default withApi(withOrganization(DashboardDetail));
+export default withProjects(withApi(withOrganization(DashboardDetail)));

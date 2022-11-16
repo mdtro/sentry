@@ -1,34 +1,29 @@
 import styled from '@emotion/styled';
-import {Location} from 'history';
+import type {Location} from 'history';
 
 import {SectionContents} from 'sentry/components/events/eventDataSection';
 import {t} from 'sentry/locale';
-import {Organization, Project} from 'sentry/types';
-import {Event} from 'sentry/types/event';
+import type {Organization, Project} from 'sentry/types';
+import type {Event} from 'sentry/types/event';
 
-import EventTags from '../eventTags/eventTags';
+import {EventTags} from '../eventTags';
 
-import DataSection from './dataSection';
-import TagsHighlight from './tagsHighlight';
+import {DataSection} from './dataSection';
 
 type Props = {
   event: Event;
-  hasContext: boolean;
   location: Location;
   organization: Organization;
   projectSlug: Project['slug'];
 };
 
-function Tags({event, organization, projectSlug, location, hasContext}: Props) {
+function Tags({event, organization, projectSlug, location}: Props) {
   return (
     <StyledDataSection
       title={t('Tags')}
-      description={t(
-        'Tags help you quickly both access related events and view the tag distribution for a set of events'
-      )}
+      description={t('The default and custom tags associated with this event')}
       data-test-id="event-tags"
     >
-      {hasContext && <TagsHighlight event={event} />}
       <EventTags
         event={event}
         organization={organization}
@@ -42,6 +37,7 @@ function Tags({event, organization, projectSlug, location, hasContext}: Props) {
 export default Tags;
 
 const StyledDataSection = styled(DataSection)`
+  border-top: 0;
   overflow: hidden;
   ${SectionContents} {
     overflow: hidden;

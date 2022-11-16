@@ -1,4 +1,5 @@
 import {Fragment, useMemo, useState} from 'react';
+// eslint-disable-next-line no-restricted-imports
 import {withRouter} from 'react-router';
 import pick from 'lodash/pick';
 
@@ -11,13 +12,20 @@ import Truncate from 'sentry/components/truncate';
 import {t, tct} from 'sentry/locale';
 import DiscoverQuery from 'sentry/utils/discover/discoverQuery';
 import {getAggregateAlias} from 'sentry/utils/discover/fields';
-import {useMEPSettingContext} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
+import {
+  canUseMetricsData,
+  useMEPSettingContext,
+} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
 import {usePageError} from 'sentry/utils/performance/contexts/pageError';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
 import withApi from 'sentry/utils/withApi';
 import _DurationChart from 'sentry/views/performance/charts/chart';
 import {transactionSummaryRouteWithQuery} from 'sentry/views/performance/transactionSummary/utils';
-import {getPerformanceDuration} from 'sentry/views/performance/utils';
+import {
+  createUnnamedTransactionsDiscoverTarget,
+  getPerformanceDuration,
+  UNPARAMETERIZED_TRANSACTION,
+} from 'sentry/views/performance/utils';
 
 import {excludeTransaction} from '../../utils';
 import {GenericPerformanceWidget} from '../components/performanceWidget';
@@ -89,6 +97,11 @@ export function LineChartListWidget(props: PerformanceWidgetProps) {
           ];
           eventView.additionalConditions.setFilterValues('event.type', ['error']);
           eventView.additionalConditions.setFilterValues('!tags[transaction]', ['']);
+          if (canUseMetricsData(organization)) {
+            eventView.additionalConditions.setFilterValues('!transaction', [
+              UNPARAMETERIZED_TRANSACTION,
+            ]);
+          }
           const mutableSearch = new MutableSearch(eventView.query);
           mutableSearch.removeFilter('transaction.duration');
           eventView.additionalConditions.removeFilter('transaction.op'); // Remove transaction op incase it's applied from the performance view.
@@ -156,7 +169,13 @@ export function LineChartListWidget(props: PerformanceWidgetProps) {
               provided.widgetData.list.data[selectedListIndex].issue as string,
             ]);
             eventView.additionalConditions.setFilterValues('event.type', ['error']);
-            eventView.additionalConditions.setFilterValues('!tags[transaction]', ['']);
+
+            if (canUseMetricsData(organization)) {
+              eventView.additionalConditions.setFilterValues('!transaction', [
+                UNPARAMETERIZED_TRANSACTION,
+              ]);
+            }
+
             eventView.additionalConditions.removeFilter('transaction.op'); // Remove transaction op incase it's applied from the performance view.
             eventView.additionalConditions.removeFilter('!transaction.op'); // Remove transaction op incase it's applied from the performance view.
             const mutableSearch = new MutableSearch(eventView.query);
@@ -229,7 +248,7 @@ export function LineChartListWidget(props: PerformanceWidgetProps) {
               selectedIndex={selectedListIndex}
               setSelectedIndex={setSelectListIndex}
               items={provided.widgetData.list.data.map(listItem => () => {
-                const transaction = listItem.transaction as string;
+                const transaction = (listItem.transaction as string | undefined) ?? '';
 
                 const additionalQuery: Record<string, string> = {};
 
@@ -251,13 +270,19 @@ export function LineChartListWidget(props: PerformanceWidgetProps) {
                   additionalQuery.display = 'latency';
                 }
 
-                const transactionTarget = transactionSummaryRouteWithQuery({
-                  orgSlug: props.organization.slug,
-                  projectID: listItem['project.id'] as string,
-                  transaction,
-                  query: props.eventView.getPageFiltersQuery(),
-                  additionalQuery,
-                });
+                const isUnparameterizedRow = transaction === UNPARAMETERIZED_TRANSACTION;
+                const transactionTarget = isUnparameterizedRow
+                  ? createUnnamedTransactionsDiscoverTarget({
+                      organization,
+                      location: props.location,
+                    })
+                  : transactionSummaryRouteWithQuery({
+                      orgSlug: props.organization.slug,
+                      projectID: listItem['project.id'] as string,
+                      transaction,
+                      query: props.eventView.getPageFiltersQuery(),
+                      additionalQuery,
+                    });
 
                 const fieldString = useEvents ? field : getAggregateAlias(field);
 
@@ -280,7 +305,7 @@ export function LineChartListWidget(props: PerformanceWidgetProps) {
                         <RightAlignedCell>
                           <Tooltip title={listItem.title}>
                             <Link
-                              to={`/organizations/${props.organization.slug}/issues/${listItem['issue.id']}/`}
+                              to={`/organizations/${props.organization.slug}/issues/${listItem['issue.id']}/?referrer=performance-line-chart-widget`}
                             >
                               {rightValue}
                             </Link>

@@ -1,4 +1,5 @@
 import {Fragment} from 'react';
+// eslint-disable-next-line no-restricted-imports
 import {withRouter, WithRouterProps} from 'react-router';
 import {css} from '@emotion/react';
 import styled from '@emotion/styled';
@@ -35,6 +36,7 @@ type Props = WithRouterProps<{orgId: string}> & {
   onClick?: () => void;
   query?: string;
   size?: Size;
+  source?: string;
 };
 
 /**
@@ -53,6 +55,7 @@ function EventOrGroupHeader({
   includeLink = true,
   size = 'normal',
   grouping = false,
+  source,
   ...props
 }: Props) {
   const hasGroupingTreeUI = !!organization.features?.includes('grouping-tree-ui');
@@ -62,11 +65,13 @@ function EventOrGroupHeader({
     return (
       <Fragment>
         {!hideLevel && level && (
-          <GroupLevel level={level}>
-            <Tooltip title={tct('Error level: [level]', {level: capitalize(level)})}>
-              <span />
-            </Tooltip>
-          </GroupLevel>
+          <Tooltip
+            skipWrapper
+            disabled={level === 'unknown'}
+            title={tct('Error level: [level]', {level: capitalize(level)})}
+          >
+            <GroupLevel level={level} />
+          </Tooltip>
         )}
         {!hideIcons && status === 'ignored' && (
           <IconWrapper>
@@ -113,6 +118,7 @@ function EventOrGroupHeader({
               eventID ? `events/${eventID}/` : ''
             }`,
             query: {
+              referrer: source || 'event-or-group-header',
               query,
               // This adds sort to the query if one was selected from the
               // issues list page
@@ -185,7 +191,7 @@ const Title = styled('div')<{hasGroupingTreeUI: boolean; size: Size}>`
         `
       : css`
           > a:first-child {
-            display: flex;
+            display: inline-flex;
             min-height: ${space(3)};
           }
         `}
@@ -238,12 +244,6 @@ const GroupLevel = styled('div')<{level: Level}>`
   border-radius: 0 3px 3px 0;
 
   background-color: ${p => p.theme.level[p.level] ?? p.theme.level.default};
-
-  & span {
-    display: block;
-    width: 9px;
-    height: 15px;
-  }
 `;
 
 export default withRouter(withOrganization(EventOrGroupHeader));

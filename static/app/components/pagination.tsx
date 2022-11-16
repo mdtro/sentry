@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-restricted-imports
 import {browserHistory, withRouter, WithRouterProps} from 'react-router';
 import styled from '@emotion/styled';
 import {Query} from 'history';
@@ -30,7 +31,7 @@ type Props = WithRouterProps & {
   onCursor?: CursorHandler;
   pageLinks?: string | null;
   paginationAnalyticsEvent?: (direction: string) => void;
-  size?: 'zero' | 'xsmall' | 'small';
+  size?: 'zero' | 'xs' | 'sm';
   to?: string;
 };
 
@@ -47,7 +48,7 @@ const Pagination = ({
   onCursor = defaultOnCursor,
   paginationAnalyticsEvent,
   pageLinks,
-  size = 'small',
+  size = 'sm',
   caption,
   disabled = false,
 }: Props) => {
@@ -74,6 +75,7 @@ const Pagination = ({
             onCursor?.(links.previous?.cursor, path, query, -1);
             paginationAnalyticsEvent?.('Previous');
           }}
+          type="button"
         />
         <Button
           icon={<IconChevron direction="right" size="sm" />}
@@ -84,6 +86,7 @@ const Pagination = ({
             onCursor?.(links.next?.cursor, path, query, 1);
             paginationAnalyticsEvent?.('Next');
           }}
+          type="button"
         />
       </ButtonBar>
     </Wrapper>

@@ -1,18 +1,23 @@
 import {addErrorMessage} from 'sentry/actionCreators/indicator';
-import SavedSearchesActions from 'sentry/actions/savedSearchesActions';
 import {Client} from 'sentry/api';
 import {MAX_AUTOCOMPLETE_RECENT_SEARCHES} from 'sentry/constants';
 import {t} from 'sentry/locale';
-import {RecentSearch, SavedSearch, SavedSearchType} from 'sentry/types';
+import SavedSearchesStore from 'sentry/stores/savedSearchesStore';
+import {
+  RecentSearch,
+  SavedSearch,
+  SavedSearchType,
+  SavedSearchVisibility,
+} from 'sentry/types';
 import handleXhrErrorResponse from 'sentry/utils/handleXhrErrorResponse';
 
 export function resetSavedSearches() {
-  SavedSearchesActions.resetSavedSearches();
+  SavedSearchesStore.onReset();
 }
 
 export function fetchSavedSearches(api: Client, orgSlug: string): Promise<SavedSearch[]> {
   const url = `/organizations/${orgSlug}/searches/`;
-  SavedSearchesActions.startFetchSavedSearches();
+  SavedSearchesStore.onStartFetchSavedSearches();
 
   const promise = api.requestPromise(url, {
     method: 'GET',
@@ -20,25 +25,14 @@ export function fetchSavedSearches(api: Client, orgSlug: string): Promise<SavedS
 
   promise
     .then(resp => {
-      SavedSearchesActions.fetchSavedSearchesSuccess(resp);
+      SavedSearchesStore.onFetchSavedSearchesSuccess(resp);
     })
     .catch(err => {
-      SavedSearchesActions.fetchSavedSearchesError(err);
+      SavedSearchesStore.onFetchSavedSearchesError(err);
       addErrorMessage(t('Unable to load saved searches'));
     });
 
   return promise;
-}
-
-export function fetchProjectSavedSearches(
-  api: Client,
-  orgSlug: string,
-  projectId: string
-): Promise<SavedSearch[]> {
-  const url = `/projects/${orgSlug}/${projectId}/searches/`;
-  return api.requestPromise(url, {
-    method: 'GET',
-  });
 }
 
 const getRecentSearchUrl = (orgSlug: string): string =>
@@ -85,7 +79,8 @@ export function createSavedSearch(
   orgSlug: string,
   name: string,
   query: string,
-  sort: string | null
+  sort: string | null,
+  visibility: SavedSearchVisibility
 ): Promise<SavedSearch> {
   const promise = api.requestPromise(`/organizations/${orgSlug}/searches/`, {
     method: 'POST',
@@ -94,13 +89,14 @@ export function createSavedSearch(
       query,
       name,
       sort,
+      visibility,
     },
   });
 
   // Need to wait for saved search to save unfortunately because we need to redirect
   // to saved search URL
   promise.then(resp => {
-    SavedSearchesActions.createSavedSearchSuccess(resp);
+    SavedSearchesStore.onCreateSavedSearchSuccess(resp);
   });
 
   return promise;
@@ -153,7 +149,7 @@ export function pinSearch(
   const url = getPinSearchUrl(orgSlug);
 
   // Optimistically update store
-  SavedSearchesActions.pinSearch(type, query, sort);
+  SavedSearchesStore.onPinSearch(type, query, sort);
 
   const promise = api.requestPromise(url, {
     method: 'PUT',
@@ -164,12 +160,12 @@ export function pinSearch(
     },
   });
 
-  promise.then(SavedSearchesActions.pinSearchSuccess);
+  promise.then(SavedSearchesStore.onPinSearchSuccess);
 
   promise.catch(handleXhrErrorResponse('Unable to pin search'));
 
   promise.catch(() => {
-    SavedSearchesActions.unpinSearch(type);
+    SavedSearchesStore.onUnpinSearch(type);
   });
 
   return promise;
@@ -184,7 +180,7 @@ export function unpinSearch(
   const url = getPinSearchUrl(orgSlug);
 
   // Optimistically update store
-  SavedSearchesActions.unpinSearch(type);
+  SavedSearchesStore.onUnpinSearch(type);
 
   const promise = api.requestPromise(url, {
     method: 'DELETE',
@@ -197,7 +193,7 @@ export function unpinSearch(
 
   promise.catch(() => {
     const {type: pinnedType, query} = pinnedSearch;
-    SavedSearchesActions.pinSearch(pinnedType, query);
+    SavedSearchesStore.onPinSearch(pinnedType, query);
   });
 
   return promise;
@@ -221,7 +217,7 @@ export function deleteSavedSearch(
     .requestPromise(url, {
       method: 'DELETE',
     })
-    .then(() => SavedSearchesActions.deleteSavedSearchSuccess(search))
+    .then(() => SavedSearchesStore.onDeleteSavedSearchSuccess(search))
     .catch(handleXhrErrorResponse('Unable to delete a saved search'));
 
   return promise;

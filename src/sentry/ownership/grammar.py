@@ -70,6 +70,14 @@ class Rule(namedtuple("Rule", "matcher owners")):
     This line contains a Matcher and a list of Owners.
     """
 
+    def __str__(self) -> str:
+        owners = [o.dump() for o in self.owners]
+        owners_str = " ".join(
+            f"#{owner['identifier']}" if owner["type"] == "team" else owner["identifier"]
+            for owner in owners
+        )
+        return f"{self.matcher} {owners_str}"
+
     def dump(self) -> Mapping[str, Sequence[Owner]]:
         return {"matcher": self.matcher.dump(), "owners": [o.dump() for o in self.owners]}
 
@@ -95,6 +103,9 @@ class Matcher(namedtuple("Matcher", "type pattern")):
         path:src/*
         src/*
     """
+
+    def __str__(self) -> str:
+        return f"{self.type}:{self.pattern}"
 
     def dump(self) -> Mapping[str, str]:
         return {"type": self.type, "pattern": self.pattern}
@@ -406,6 +417,10 @@ def parse_code_owners(data: str) -> Tuple[List[str], List[str], List[str]]:
         if rule.startswith("#") or not len(rule):
             continue
 
+        # Skip lines that are only empty space characters
+        if re.match(r"^\s*$", rule):
+            continue
+
         _, assignees = get_codeowners_path_and_owners(rule)
         for assignee in assignees:
             if "/" not in assignee:
@@ -442,6 +457,10 @@ def convert_codeowners_syntax(
         if rule.startswith("#") or not len(rule):
             # We want to preserve comments from CODEOWNERS
             result += f"{rule}\n"
+            continue
+
+        # Skip lines that are only empty space characters
+        if re.match(r"^\s*$", rule):
             continue
 
         path, code_owners = get_codeowners_path_and_owners(rule)
@@ -487,6 +506,20 @@ def convert_codeowners_syntax(
     return result
 
 
+def get_source_code_path_from_stacktrace_path(
+    stacktrace_path: str, code_mapping: RepositoryProjectPathConfig
+) -> str | None:
+    if re.search(r"[\/].{1}", stacktrace_path):
+        path_with_source_root = stacktrace_path.replace(
+            code_mapping.stack_root, code_mapping.source_root, 1
+        )
+        # flatten multiple '/' if not protocol
+        formatted_path = re.sub(r"(?<!:)\/{2,}", "/", path_with_source_root)
+        return formatted_path
+
+    return None
+
+
 def resolve_actors(owners: Iterable[Owner], project_id: int) -> Mapping[Owner, ActorTuple]:
     """Convert a list of Owner objects into a dictionary
     of {Owner: Actor} pairs. Actors not identified are returned
@@ -514,6 +547,8 @@ def resolve_actors(owners: Iterable[Owner], project_id: int) -> Mapping[Owner, A
         actors.update(
             {
                 ("user", email.lower()): ActorTuple(u_id, User)
+                # This will need to be broken in hybrid cloud world, querying users from region silo won't be possible
+                # without an explicit service call.
                 for u_id, email in User.objects.filter(
                     reduce(operator.or_, [Q(emails__email__iexact=o.identifier) for o in users]),
                     # We don't require verified emails

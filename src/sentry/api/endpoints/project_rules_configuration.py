@@ -2,11 +2,13 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import features
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint
 from sentry.constants import MIGRATED_CONDITIONS, SENTRY_APP_ACTIONS, TICKET_ACTIONS
 from sentry.rules import rules
 
 
+@region_silo_endpoint
 class ProjectRulesConfigurationEndpoint(ProjectEndpoint):
     def get(self, request: Request, project) -> Response:
         """
@@ -21,6 +23,7 @@ class ProjectRulesConfigurationEndpoint(ProjectEndpoint):
         can_create_tickets = features.has(
             "organizations:integrations-ticket-rules", project.organization
         )
+        perf_issue_filters = features.has("organizations:performance-issues", project.organization)
 
         # TODO: conditions need to be based on actions
         for rule_type, rule_cls in rules:
@@ -60,9 +63,16 @@ class ProjectRulesConfigurationEndpoint(ProjectEndpoint):
                 continue
 
             if rule_type.startswith("condition/"):
-                condition_list.append(context)
+                if (
+                    context["id"]
+                    != "sentry.rules.conditions.active_release.ActiveReleaseEventCondition"
+                ):
+                    condition_list.append(context)
             elif rule_type.startswith("filter/"):
-                filter_list.append(context)
+                if perf_issue_filters or context["id"] not in {
+                    "sentry.rules.filters.issue_category.IssueCategoryFilter",
+                }:
+                    filter_list.append(context)
             elif rule_type.startswith("action/"):
                 action_list.append(context)
 

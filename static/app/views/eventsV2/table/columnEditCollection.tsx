@@ -7,13 +7,13 @@ import {parseArithmetic} from 'sentry/components/arithmeticInput/parser';
 import Button from 'sentry/components/button';
 import ButtonBar from 'sentry/components/buttonBar';
 import {SectionHeading} from 'sentry/components/charts/styles';
-import Input from 'sentry/components/forms/controls/input';
+import Input from 'sentry/components/input';
 import {getOffsetOfElement} from 'sentry/components/performance/waterfall/utils';
 import {IconAdd, IconDelete, IconGrabbable} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
-import {trackAnalyticsEvent} from 'sentry/utils/analytics';
+import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
 import {
   AGGREGATIONS,
   Column,
@@ -146,11 +146,7 @@ class ColumnEditCollection extends Component<Props, State> {
   handleAddEquation = () => {
     const {organization} = this.props;
     const newColumn: Column = {kind: FieldValueKind.EQUATION, field: ''};
-    trackAnalyticsEvent({
-      eventKey: 'discover_v2.add_equation',
-      eventName: 'Discoverv2: Equation added',
-      organization_id: parseInt(organization.id, 10),
-    });
+    trackAdvancedAnalyticsEvent('discover_v2.add_equation', {organization});
     this.props.onChange([...this.props.columns, newColumn]);
   };
 
@@ -550,7 +546,8 @@ class ColumnEditCollection extends Component<Props, State> {
     const title = canAdd
       ? undefined
       : t(
-          `Sorry, you've reached the maximum number of columns (${MAX_COL_COUNT}). Delete columns to add more.`
+          `Sorry, you've reached the maximum number of columns (%d). Delete columns to add more.`,
+          MAX_COL_COUNT
         );
 
     const singleColumn = columns.length === 1;
@@ -611,7 +608,7 @@ class ColumnEditCollection extends Component<Props, State> {
         <RowContainer showAliasField={showAliasField} singleColumn={singleColumn}>
           <Actions gap={1} showAliasField={showAliasField}>
             <Button
-              size="small"
+              size="sm"
               aria-label={t('Add a Column')}
               onClick={this.handleAddColumn}
               title={title}
@@ -622,7 +619,7 @@ class ColumnEditCollection extends Component<Props, State> {
             </Button>
             {source !== WidgetType.ISSUE && source !== WidgetType.RELEASE && (
               <Button
-                size="small"
+                size="sm"
                 aria-label={t('Add an Equation')}
                 onClick={this.handleAddEquation}
                 title={title}
@@ -695,7 +692,7 @@ const DragPlaceholder = styled('div')`
   margin: 0 ${space(3)} ${space(1)} ${space(3)};
   border: 2px dashed ${p => p.theme.border};
   border-radius: ${p => p.theme.borderRadius};
-  height: 41px;
+  height: ${p => p.theme.form.md.height}px;
 `;
 
 const Heading = styled('div')<{gridColumns: number}>`
@@ -712,8 +709,6 @@ const StyledSectionHeading = styled(SectionHeading)`
 `;
 
 const AliasInput = styled(Input)`
-  /* Match the height of the select boxes */
-  height: 40px;
   min-width: 50px;
 `;
 
@@ -732,11 +727,11 @@ const AliasField = styled('div')<{singleColumn: boolean}>`
 
 const RemoveButton = styled(Button)`
   margin-left: ${space(1)};
-  height: 40px;
+  height: ${p => p.theme.form.md.height}px;
 `;
 
 const DragAndReorderButton = styled(Button)`
-  height: 40px;
+  height: ${p => p.theme.form.md.height}px;
 `;
 
 export default ColumnEditCollection;

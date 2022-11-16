@@ -11,6 +11,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import audit_log
+from sentry.api.base import region_silo_endpoint
 from sentry.api.endpoints.organization_teams import OrganizationTeamsEndpoint
 from sentry.api.endpoints.team_details import TeamDetailsEndpoint, TeamSerializer
 from sentry.api.exceptions import ResourceDoesNotExist
@@ -71,6 +72,8 @@ def _team_expand(excluded_attributes):
     return None if "members" in excluded_attributes else ["members"]
 
 
+@extend_schema(tags=["SCIM"])
+@region_silo_endpoint
 class OrganizationSCIMTeamIndex(SCIMEndpoint, OrganizationTeamsEndpoint):
     permission_classes = (OrganizationSCIMTeamPermission,)
     public = {"GET", "POST"}
@@ -195,9 +198,11 @@ class OrganizationSCIMTeamIndex(SCIMEndpoint, OrganizationTeamsEndpoint):
         return super().post(request, organization)
 
 
+@extend_schema(tags=["SCIM"])
+@region_silo_endpoint
 class OrganizationSCIMTeamDetails(SCIMEndpoint, TeamDetailsEndpoint):
     permission_classes = (OrganizationSCIMTeamPermission,)
-    public = {"GET", "PATCH"}
+    public = {"GET", "PATCH", "DELETE"}
 
     def convert_args(self, request: Request, organization_slug, team_id, *args, **kwargs):
         args, kwargs = super().convert_args(request, organization_slug)
@@ -320,55 +325,61 @@ class OrganizationSCIMTeamDetails(SCIMEndpoint, TeamDetailsEndpoint):
     )
     def patch(self, request: Request, organization, team):
         """
-        A SCIM Group PATCH request takes a series of operations to perform on a team.
-        It does them sequentially and if any of them fail no operations should go through.
-        The operations are add members, remove members, replace members, and rename team.
-        Update a team's attributes with a SCIM Group PATCH Request. Valid Operations are:
+        Update a team's attributes with a SCIM Group PATCH Request. Valid operations are:
+
         * Renaming a team:
         ```json
         {
-            "op": "replace",
-            "value": {
-                "id": 23,
-                "displayName": "newName"
+            "Operations": {
+                "op": "replace",
+                "value": {
+                    "id": 23,
+                    "displayName": "newName"
+                }
             }
         }
         ```
         * Adding a member to a team:
         ```json
         {
-            "op": "add",
-            "path": "members",
-            "value": [
-                {
-                    "value": 23,
-                    "display": "testexample@example.com"
-                }
-            ]
+            "Operations": {
+                "op": "add",
+                "path": "members",
+                "value": [
+                    {
+                        "value": 23,
+                        "display": "testexample@example.com"
+                    }
+                ]
+            }
         }
         ```
         * Removing a member from a team:
         ```json
         {
-            "op": "remove",
-            "path": "members[value eq \"23\"]"
+            "Operations": {
+                "op": "remove",
+                "path": "members[value eq \"23\"]"
+            }
         }
         ```
         * Replacing an entire member set of a team:
         ```json
         {
-            "op": "replace",
-            "path": "members",
-            "value": [
-                {
-                    "value": 23,
-                    "display": "testexample2@sentry.io"
-                },
-                {
-                    "value": 24,
-                    "display": "testexample3@sentry.io"
-                }
-            ]
+            "Operations": {
+                "op": "replace",
+                "path": "members",
+                "value": [
+                    {
+                        "value": 23,
+                        "display": "testexample2@sentry.io"
+                    },
+                    {
+                        "value": 24,
+                        "display": "testexample3@sentry.io"
+                    }
+                ]
+            }
         }
         ```
         """

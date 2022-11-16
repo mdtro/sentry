@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
 
 from django.conf import settings
@@ -13,6 +14,7 @@ from sentry.db.models import (
     FlexibleForeignKey,
     GzippedDictField,
     Model,
+    region_silo_only_model,
     sane_repr,
 )
 from sentry.tasks import activity
@@ -20,6 +22,7 @@ from sentry.types.activity import CHOICES, ActivityType
 
 if TYPE_CHECKING:
     from sentry.models import Group, User
+    from sentry.services.hybrid_cloud.user import APIUser
 
 
 class ActivityManager(BaseManager):
@@ -57,23 +60,26 @@ class ActivityManager(BaseManager):
         self,
         group: Group,
         type: ActivityType,
-        user: Optional[User] = None,
+        user: Optional[User | APIUser] = None,
         data: Optional[Mapping[str, Any]] = None,
         send_notification: bool = True,
     ) -> Activity:
-        activity = self.create(
-            project_id=group.project_id,
-            group=group,
-            type=type.value,
-            user=user,
-            data=data,
-        )
+        activity_args = {
+            "project_id": group.project_id,
+            "group": group,
+            "type": type.value,
+            "data": data,
+        }
+        if user is not None:
+            activity_args["user_id"] = user.id
+        activity = self.create(**activity_args)
         if send_notification:
             activity.send_notification()
 
         return activity
 
 
+@region_silo_only_model
 class Activity(Model):
     __include_in_export__ = False
 
@@ -133,3 +139,13 @@ class Activity(Model):
 
     def send_notification(self):
         activity.send_activity_notifications.delay(self.id)
+
+
+class ActivityIntegration(Enum):
+    """Used in the Activity data column to define an acting integration"""
+
+    CODEOWNERS = "codeowners"
+    PROJECT_OWNERSHIP = "projectOwnership"
+    SLACK = "slack"
+    MSTEAMS = "msteams"
+    SUSPECT_COMMITTER = "suspectCommitter"

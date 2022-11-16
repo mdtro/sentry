@@ -3,7 +3,7 @@ import {Fragment} from 'react';
 import AsyncComponent from 'sentry/components/asyncComponent';
 import Form from 'sentry/components/forms/form';
 import JsonForm from 'sentry/components/forms/jsonForm';
-import {Field} from 'sentry/components/forms/type';
+import {Field} from 'sentry/components/forms/types';
 import {t} from 'sentry/locale';
 import {Organization, OrganizationSummary} from 'sentry/types';
 import {OrganizationIntegration} from 'sentry/types/integrations';
@@ -35,7 +35,6 @@ import {
   isGroupedByProject,
   isSufficientlyComplex,
   mergeNotificationSettings,
-  providerListToString,
 } from 'sentry/views/settings/account/notifications/utils';
 import SettingsPageHeader from 'sentry/views/settings/components/settingsPageHeader';
 import TextBlock from 'sentry/views/settings/components/text/textBlock';
@@ -52,7 +51,13 @@ type State = {
 } & AsyncComponent['state'];
 
 const typeMappedChildren = {
-  quota: ['quotaErrors', 'quotaTransactions', 'quotaAttachments', 'quotaWarnings'],
+  quota: [
+    'quotaErrors',
+    'quotaTransactions',
+    'quotaAttachments',
+    'quotaWarnings',
+    'quotaSpendAllocations',
+  ],
 };
 
 const getQueryParams = (notificationType: string) => {
@@ -211,23 +216,28 @@ class NotificationSettingsByType extends AsyncComponent<Props, State> {
 
   /* Methods responsible for rendering the page. */
 
-  getInitialData(): {[key: string]: string} {
+  getInitialData(): {[key: string]: string | string[]} {
     const {notificationType} = this.props;
     const {notificationSettings} = this.state;
 
-    const initialData = {
-      [notificationType]: getCurrentDefault(notificationType, notificationSettings),
-    };
-    if (!isEverythingDisabled(notificationType, notificationSettings)) {
-      initialData.provider = providerListToString(
-        getCurrentProviders(notificationType, notificationSettings)
-      );
-    }
+    // TODO: Backend should be in charge of providing defaults since it depends on the type
+    const provider = !isEverythingDisabled(notificationType, notificationSettings)
+      ? getCurrentProviders(notificationType, notificationSettings)
+      : ['email', 'slack'];
+
     const childTypes: string[] = typeMappedChildren[notificationType] || [];
-    childTypes.forEach(childType => {
-      initialData[childType] = getCurrentDefault(childType, notificationSettings);
-    });
-    return initialData;
+    const childTypesDefaults = Object.fromEntries(
+      childTypes.map(childType => [
+        childType,
+        getCurrentDefault(childType, notificationSettings),
+      ])
+    );
+
+    return {
+      [notificationType]: getCurrentDefault(notificationType, notificationSettings),
+      provider,
+      ...childTypesDefaults,
+    };
   }
 
   getFields(): Field[] {

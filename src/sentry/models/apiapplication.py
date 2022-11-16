@@ -9,9 +9,9 @@ from django.utils.translation import ugettext_lazy as _
 from sentry.db.models import (
     BaseManager,
     BoundedPositiveIntegerField,
-    EncryptedTextField,
     FlexibleForeignKey,
     Model,
+    control_silo_only_model,
     sane_repr,
 )
 
@@ -31,11 +31,12 @@ class ApiApplicationStatus:
     deletion_in_progress = 3
 
 
+@control_silo_only_model
 class ApiApplication(Model):
     __include_in_export__ = True
 
     client_id = models.CharField(max_length=64, unique=True, default=generate_token)
-    client_secret = EncryptedTextField(default=generate_token)
+    client_secret = models.TextField(default=generate_token)
     owner = FlexibleForeignKey("sentry.User")
     name = models.CharField(max_length=64, blank=True, default=generate_name)
     status = BoundedPositiveIntegerField(

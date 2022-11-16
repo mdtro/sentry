@@ -1,14 +1,20 @@
 import logging
 
-from django.db import models
+from django.db import models, transaction
 from django.db.models.signals import post_delete, post_save
 
-from sentry.db.models import BoundedPositiveIntegerField, DefaultFieldsModel, FlexibleForeignKey
+from sentry.db.models import (
+    BoundedPositiveIntegerField,
+    DefaultFieldsModel,
+    FlexibleForeignKey,
+    region_silo_only_model,
+)
 from sentry.types.integrations import ExternalProviders
 
 logger = logging.getLogger(__name__)
 
 
+@region_silo_only_model
 class ExternalActor(DefaultFieldsModel):
     __include_in_export__ = False
 
@@ -48,11 +54,18 @@ class ExternalActor(DefaultFieldsModel):
 
 
 def process_resource_change(instance, **kwargs):
+    from sentry.models import Organization, Project
     from sentry.tasks.codeowners import update_code_owners_schema
 
-    return update_code_owners_schema.apply_async(
-        kwargs={"organization": instance.organization, "integration": instance.integration}
-    )
+    def _spawn_task():
+        try:
+            update_code_owners_schema.apply_async(
+                kwargs={"organization": instance.organization, "integration": instance.integration}
+            )
+        except (Organization.DoesNotExist, Project.DoesNotExist):
+            pass
+
+    transaction.on_commit(_spawn_task)
 
 
 post_save.connect(

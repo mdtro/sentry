@@ -1,3 +1,5 @@
+from selenium.webdriver.common.by import By
+
 from .base import BasePage
 from .global_selection import GlobalSelectionPage
 
@@ -25,7 +27,9 @@ class IssueDetailsPage(BasePage):
         self.browser.wait_until('[data-test-id="group-tag-value"]')
 
     def get_environment(self):
-        return self.browser.find_element_by_css_selector('[data-test-id="env-label"').text.lower()
+        return self.browser.find_element(
+            by=By.CSS_SELECTOR, value='[data-test-id="env-label"'
+        ).text.lower()
 
     def go_back_to_issues(self):
         self.global_selection.go_back_to_issues()
@@ -33,9 +37,9 @@ class IssueDetailsPage(BasePage):
     def api_issue_get(self, groupid):
         return self.client.get(f"/api/0/issues/{groupid}/")
 
-    def go_to_subtab(self, name):
-        tabs = self.browser.find_element_by_css_selector(".group-detail .nav-tabs")
-        tabs.find_element_by_partial_link_text(name).click()
+    def go_to_subtab(self, key):
+        tabs = self.browser.find_element(by=By.CSS_SELECTOR, value='[role="tablist"]')
+        tabs.find_element(by=By.CSS_SELECTOR, value=f'[role="tab"][data-key="{key}"]').click()
         self.browser.wait_until_not('[data-test-id="loading-indicator"]')
 
     def open_issue_errors(self):
@@ -43,7 +47,7 @@ class IssueDetailsPage(BasePage):
         self.browser.wait_until(".entries > .errors ul")
 
     def open_curl(self):
-        self.browser.find_element_by_xpath("//a//code[contains(text(), 'curl')]").click()
+        self.browser.find_element(by=By.XPATH, value="//a//code[contains(text(), 'curl')]").click()
 
     def resolve_issue(self):
         self.browser.click('[aria-label="Resolve"]')
@@ -60,23 +64,32 @@ class IssueDetailsPage(BasePage):
         self.browser.wait_until('[data-test-id="bookmark"]')
         button = self.browser.element('[data-test-id="bookmark"]')
         button.click()
+        self.browser.click('button[aria-label="More Actions"]')
+        self.browser.wait_until('[data-test-id="unbookmark"]')
 
     def assign_to(self, user):
-        assignee = self.browser.find_element_by_css_selector(".assigned-to")
+        assignee = self.browser.find_element(
+            by=By.CSS_SELECTOR, value='[data-test-id="assigned-to"]'
+        )
 
         # Open the assignee picker
-        assignee.find_element_by_css_selector('[role="button"]').click()
-        assignee.find_element_by_tag_name("input").send_keys(user)
+        assignee.find_element(by=By.CSS_SELECTOR, value='[role="button"]').click()
+        assignee.find_element(by=By.TAG_NAME, value="input").send_keys(user)
 
         # Click the member/team
-        options = assignee.find_elements_by_css_selector('[data-test-id="assignee-option"]')
+        options = assignee.find_elements(
+            by=By.CSS_SELECTOR, value='[data-test-id="assignee-option"]'
+        )
         assert len(options) > 0, "No assignees could be found."
         options[0].click()
 
         self.browser.wait_until_not('[data-test-id="loading-indicator"]')
 
     def find_comment_form(self):
-        return self.browser.find_element_by_css_selector('[data-test-id="note-input-form"]')
+        self.browser.wait_until_test_id("note-input-form")
+        return self.browser.find_element(
+            by=By.CSS_SELECTOR, value='[data-test-id="note-input-form"]'
+        )
 
     def has_comment(self, text):
         element = self.browser.element('[data-test-id="activity-note-body"]')

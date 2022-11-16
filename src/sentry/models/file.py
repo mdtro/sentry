@@ -16,14 +16,15 @@ from django.core.files.storage import get_storage_class
 from django.db import IntegrityError, models, router, transaction
 from django.utils import timezone
 
-from sentry.app import locks
 from sentry.db.models import (
     BoundedBigIntegerField,
     BoundedPositiveIntegerField,
     FlexibleForeignKey,
     JSONField,
     Model,
+    region_silo_only_model,
 )
+from sentry.locks import locks
 from sentry.tasks.files import delete_file as delete_file_task
 from sentry.tasks.files import delete_unreferenced_blobs
 from sentry.utils import metrics
@@ -69,7 +70,9 @@ def _get_size_and_checksum(fileobj, logger=nooplogger):
 @contextmanager
 def _locked_blob(checksum, logger=nooplogger):
     logger.debug("_locked_blob.start", extra={"checksum": checksum})
-    lock = locks.get(f"fileblob:upload:{checksum}", duration=UPLOAD_RETRY_TIME)
+    lock = locks.get(
+        f"fileblob:upload:{checksum}", duration=UPLOAD_RETRY_TIME, name="fileblob_upload_model"
+    )
     with TimedRetryPolicy(UPLOAD_RETRY_TIME, metric_instance="lock.fileblob.upload")(lock.acquire):
         logger.debug("_locked_blob.acquired", extra={"checksum": checksum})
         # test for presence
@@ -105,6 +108,7 @@ def get_storage(config=None):
     return storage(**options)
 
 
+@region_silo_only_model
 class FileBlob(Model):
     __include_in_export__ = False
 
@@ -273,7 +277,11 @@ class FileBlob(Model):
     def delete(self, *args, **kwargs):
         if self.path:
             self.deletefile(commit=False)
-        lock = locks.get(f"fileblob:upload:{self.checksum}", duration=UPLOAD_RETRY_TIME)
+        lock = locks.get(
+            f"fileblob:upload:{self.checksum}",
+            duration=UPLOAD_RETRY_TIME,
+            name="fileblob_upload_delete",
+        )
         with TimedRetryPolicy(UPLOAD_RETRY_TIME, metric_instance="lock.fileblob.delete")(
             lock.acquire
         ):
@@ -309,6 +317,7 @@ class FileBlob(Model):
         return storage.open(self.path)
 
 
+@region_silo_only_model
 class File(Model):
     __include_in_export__ = False
 
@@ -470,6 +479,7 @@ class File(Model):
         )
 
 
+@region_silo_only_model
 class FileBlobIndex(Model):
     __include_in_export__ = False
 
@@ -644,6 +654,7 @@ class ChunkedFileBlobIndexWrapper:
         return bytes(result)
 
 
+@region_silo_only_model
 class FileBlobOwner(Model):
     __include_in_export__ = False
 

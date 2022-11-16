@@ -40,6 +40,7 @@ from sentry.db.models import (
     FlexibleForeignKey,
     JSONField,
     Model,
+    region_silo_only_model,
     sane_repr,
 )
 from sentry.models.file import File, clear_cached_files
@@ -133,6 +134,7 @@ class ProjectDebugFileManager(BaseManager):  # type: ignore
         return rv
 
 
+@region_silo_only_model
 class ProjectDebugFile(Model):  # type: ignore
     __include_in_export__ = False
 
@@ -182,7 +184,7 @@ class ProjectDebugFile(Model):  # type: ignore
             return "" if self.file_type == "exe" else ".debug"
         if self.file_format == "pe":
             return ".exe" if self.file_type == "exe" else ".dll"
-        if self.file_format == "pdb":
+        if self.file_format == "pdb" or self.file_format == "portablepdb":
             return ".pdb"
         if self.file_format == "sourcebundle":
             return ".src.zip"
@@ -220,6 +222,7 @@ def clean_redundant_difs(project: "Project", debug_id: str) -> None:
     all_features: Set[str] = set()
     bcsymbolmap_seen = False
     uuidmap_seen = False
+    il2cpp_seen = False
     for i, dif in enumerate(difs):
         mime_type = dif.file.headers.get("Content-Type")
         if mime_type == DIF_MIMETYPES["bcsymbolmap"]:
@@ -230,6 +233,11 @@ def clean_redundant_difs(project: "Project", debug_id: str) -> None:
         elif mime_type == DIF_MIMETYPES["uuidmap"]:
             if not uuidmap_seen:
                 uuidmap_seen = True
+            else:
+                dif.delete()
+        elif mime_type == DIF_MIMETYPES["il2cpp"]:
+            if not il2cpp_seen:
+                il2cpp_seen = True
             else:
                 dif.delete()
         else:
@@ -267,6 +275,7 @@ def create_dif_from_id(
         "elf",
         "pdb",
         "pe",
+        "portablepdb",
         "wasm",
         "sourcebundle",
         "bcsymbolmap",

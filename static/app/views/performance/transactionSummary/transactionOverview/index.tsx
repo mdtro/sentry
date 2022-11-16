@@ -5,15 +5,11 @@ import {Location} from 'history';
 import {loadOrganizationTags} from 'sentry/actionCreators/tags';
 import {t} from 'sentry/locale';
 import {Organization, PageFilters, Project} from 'sentry/types';
-import {trackAnalyticsEvent} from 'sentry/utils/analytics';
-import DiscoverQuery from 'sentry/utils/discover/discoverQuery';
+import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+import {useDiscoverQuery} from 'sentry/utils/discover/discoverQuery';
 import EventView from 'sentry/utils/discover/eventView';
-import {
-  Column,
-  isAggregateField,
-  QueryFieldValue,
-  WebVital,
-} from 'sentry/utils/discover/fields';
+import {Column, isAggregateField, QueryFieldValue} from 'sentry/utils/discover/fields';
+import {WebVital} from 'sentry/utils/fields';
 import {MEPSettingProvider} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
 import {removeHistogramQueryStrings} from 'sentry/utils/performance/histogram';
 import {decodeScalar} from 'sentry/utils/queryString';
@@ -55,14 +51,13 @@ function TransactionOverview(props: Props) {
 
   const {location, selection, organization, projects} = props;
 
-  useEffect(
-    () => {
-      loadOrganizationTags(api, organization.slug, selection);
-      addRoutePerformanceContext(selection);
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selection]
-  );
+  useEffect(() => {
+    loadOrganizationTags(api, organization.slug, selection);
+    addRoutePerformanceContext(selection);
+    trackAdvancedAnalyticsEvent('performance_views.transaction_summary.view', {
+      organization,
+    });
+  }, [selection, organization, api]);
 
   return (
     <MEPSettingProvider>
@@ -89,19 +84,27 @@ function OverviewContentWrapper(props: ChildProps) {
     transactionThreshold,
     transactionThresholdMetric,
   } = props;
+
   const useEvents = organization.features.includes(
     'performance-frontend-use-events-endpoint'
   );
+  const queryData = useDiscoverQuery({
+    eventView: getTotalsEventView(organization, eventView),
+    orgSlug: organization.slug,
+    location,
+    transactionThreshold,
+    transactionThresholdMetric,
+    referrer: 'api.performance.transaction-summary',
+    useEvents,
+  });
+
+  const {data: tableData, isLoading, error} = queryData;
 
   const spanOperationBreakdownFilter = decodeFilterFromLocation(location);
 
-  const totalsView = getTotalsEventView(organization, eventView);
-
   const onChangeFilter = (newFilter: SpanOperationBreakdownFilter) => {
-    trackAnalyticsEvent({
-      eventName: 'Performance Views: Filter Dropdown',
-      eventKey: 'performance_views.filter_dropdown.selection',
-      organization_id: parseInt(organization.id, 10),
+    trackAdvancedAnalyticsEvent('performance_views.filter_dropdown.selection', {
+      organization,
       action: newFilter as string,
     });
 
@@ -120,35 +123,22 @@ function OverviewContentWrapper(props: ChildProps) {
     });
   };
 
+  const totals: TotalValues | null =
+    (tableData?.data?.[0] as {[k: string]: number}) ?? null;
+
   return (
-    <DiscoverQuery
-      eventView={totalsView}
-      orgSlug={organization.slug}
+    <SummaryContent
       location={location}
-      transactionThreshold={transactionThreshold}
-      transactionThresholdMetric={transactionThresholdMetric}
-      referrer="api.performance.transaction-summary"
-      useEvents={useEvents}
-    >
-      {({isLoading, error, tableData}) => {
-        const totals: TotalValues | null =
-          (tableData?.data?.[0] as {[k: string]: number}) ?? null;
-        return (
-          <SummaryContent
-            location={location}
-            organization={organization}
-            eventView={eventView}
-            projectId={projectId}
-            transactionName={transactionName}
-            isLoading={isLoading}
-            error={error}
-            totalValues={totals}
-            onChangeFilter={onChangeFilter}
-            spanOperationBreakdownFilter={spanOperationBreakdownFilter}
-          />
-        );
-      }}
-    </DiscoverQuery>
+      organization={organization}
+      eventView={eventView}
+      projectId={projectId}
+      transactionName={transactionName}
+      isLoading={isLoading}
+      error={error}
+      totalValues={totals}
+      onChangeFilter={onChangeFilter}
+      spanOperationBreakdownFilter={spanOperationBreakdownFilter}
+    />
   );
 }
 
@@ -165,9 +155,11 @@ function getDocumentTitle(transactionName: string): string {
 
 function generateEventView({
   location,
+  organization,
   transactionName,
 }: {
   location: Location;
+  organization: Organization;
   transactionName: string;
 }): EventView {
   // Use the user supplied query but overwrite any transaction or event type
@@ -185,6 +177,10 @@ function generateEventView({
   });
 
   const fields = ['id', 'user.display', 'transaction.duration', 'trace', 'timestamp'];
+
+  if (organization.features.includes('session-replay-ui')) {
+    fields.push('replayId');
+  }
 
   return EventView.fromNewQueryWithLocation(
     {

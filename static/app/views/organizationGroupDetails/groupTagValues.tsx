@@ -75,7 +75,8 @@ class GroupTagValues extends AsyncComponent<
       baseUrl,
       project,
       environments: environment,
-      params: {orgId, groupId, tagKey},
+      group,
+      params: {orgId, tagKey},
     } = this.props;
     const {tagValueList, tag} = this.state;
     const discoverFields = [
@@ -100,7 +101,7 @@ class GroupTagValues extends AsyncComponent<
           ...discoverFields.filter(field => field !== key),
         ],
         orderby: '-timestamp',
-        query: `issue.id:${groupId} ${issuesQuery}`,
+        query: `issue:${group.shortId} ${issuesQuery}`,
         projects: [Number(project?.id)],
         environment,
         version: 2 as SavedQueryVersions,
@@ -159,7 +160,7 @@ class GroupTagValues extends AsyncComponent<
                   tooltipProps={{
                     containerDisplayMode: 'flex',
                   }}
-                  size="small"
+                  size="sm"
                   type="button"
                   aria-label={t('Show more')}
                   icon={<IconEllipsis size="xs" />}
@@ -235,7 +236,7 @@ class GroupTagValues extends AsyncComponent<
             <Title>{t('Tag Details')}</Title>
             <ButtonBar gap={1}>
               <Button
-                size="small"
+                size="sm"
                 priority="default"
                 href={`/${orgId}/${group.project.slug}/issues/${group.id}/tags/${tagKey}/export/`}
               >
@@ -265,7 +266,7 @@ class GroupTagValues extends AsyncComponent<
             ]}
             emptyMessage={t('Sorry, the tags for this issue could not be found.')}
             emptyAction={
-              !!environments?.length
+              environments?.length
                 ? t('No tags were found for the currently selected environments')
                 : null
             }

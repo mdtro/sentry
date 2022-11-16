@@ -13,10 +13,12 @@ from sentry.db.models import (
     ArrayField,
     BaseManager,
     BoundedPositiveIntegerField,
-    EncryptedJsonField,
     FlexibleForeignKey,
     Model,
+    control_silo_with_replication_model,
+    region_silo_only_model,
 )
+from sentry.db.models.fields.jsonfield import JSONField
 from sentry.types.integrations import ExternalProviders
 
 if TYPE_CHECKING:
@@ -32,6 +34,7 @@ class IdentityStatus:
     INVALID = 2
 
 
+@control_silo_with_replication_model
 class IdentityProvider(Model):
     """
     An IdentityProvider is an instance of a provider.
@@ -46,7 +49,7 @@ class IdentityProvider(Model):
     __include_in_export__ = False
 
     type = models.CharField(max_length=64)
-    config = EncryptedJsonField()
+    config = JSONField()
     date_added = models.DateTimeField(default=timezone.now, null=True)
     external_id = models.CharField(max_length=64, null=True)
 
@@ -171,6 +174,7 @@ class IdentityManager(BaseManager):
         return identity_model
 
 
+@region_silo_only_model
 class Identity(Model):
     """
     A verified link between a user and a third party identity.
@@ -181,7 +185,7 @@ class Identity(Model):
     idp = FlexibleForeignKey("sentry.IdentityProvider")
     user = FlexibleForeignKey(settings.AUTH_USER_MODEL)
     external_id = models.TextField()
-    data = EncryptedJsonField()
+    data = JSONField()
     status = BoundedPositiveIntegerField(default=IdentityStatus.UNKNOWN)
     scopes = ArrayField()
     date_verified = models.DateTimeField(default=timezone.now)

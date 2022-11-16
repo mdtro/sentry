@@ -1,4 +1,4 @@
-import {Fragment, useCallback, useMemo} from 'react';
+import {Fragment, useCallback, useEffect, useMemo} from 'react';
 import {browserHistory} from 'react-router';
 import styled from '@emotion/styled';
 import {Location} from 'history';
@@ -18,6 +18,8 @@ import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
 import {PageFilters, Project} from 'sentry/types';
 import {defined} from 'sentry/utils';
+import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+import {isAggregateField} from 'sentry/utils/discover/fields';
 import {useProfileFilters} from 'sentry/utils/profiling/hooks/useProfileFilters';
 import {decodeScalar} from 'sentry/utils/queryString';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
@@ -32,7 +34,7 @@ interface ProfileSummaryPageProps {
   params: {
     projectId?: Project['slug'];
   };
-  selection?: PageFilters;
+  selection: PageFilters;
 }
 
 function ProfileSummaryPage(props: ProfileSummaryPageProps) {
@@ -40,6 +42,12 @@ function ProfileSummaryPage(props: ProfileSummaryPageProps) {
   const {projects} = useProjects({
     slugs: defined(props.params.projectId) ? [props.params.projectId] : [],
   });
+
+  useEffect(() => {
+    trackAdvancedAnalyticsEvent('profiling_views.profile_summary', {
+      organization,
+    });
+  }, [organization]);
 
   // Extract the project matching the provided project slug,
   // if it doesn't exist, set this to null and handle it accordingly.
@@ -56,8 +64,16 @@ function ProfileSummaryPage(props: ProfileSummaryPageProps) {
     const search = new MutableSearch(rawQuery);
 
     if (defined(transaction)) {
-      search.setFilterValues('transaction_name', [transaction]);
+      search.setFilterValues('transaction', [transaction]);
     }
+
+    // there are no aggregations happening on this page,
+    // so remove any aggregate filters
+    Object.keys(search.filters).forEach(field => {
+      if (isAggregateField(field)) {
+        search.removeFilter(field);
+      }
+    });
 
     return search.formatString();
   }, [rawQuery, transaction]);
@@ -98,13 +114,9 @@ function ProfileSummaryPage(props: ProfileSummaryPageProps) {
       orgSlug={organization.slug}
     >
       <PageFiltersContainer
-        lockedMessageSubject={t('profile')}
         shouldForceProject={defined(project)}
         forceProject={project}
         specificProjectSlugs={defined(project) ? [project.slug] : []}
-        disableMultipleProjectSelection
-        showProjectSettingsLink
-        hideGlobalHeader
       >
         <NoProjectMessage organization={organization}>
           {project && transaction && (
@@ -112,14 +124,19 @@ function ProfileSummaryPage(props: ProfileSummaryPageProps) {
               <Layout.Header>
                 <Layout.HeaderContent>
                   <Breadcrumb
-                    location={props.location}
                     organization={organization}
                     trails={[
-                      {type: 'landing'},
+                      {
+                        type: 'landing',
+                        payload: {
+                          query: props.location.query,
+                        },
+                      },
                       {
                         type: 'profile summary',
                         payload: {
                           projectSlug: project.slug,
+                          query: props.location.query,
                           transaction,
                         },
                       },

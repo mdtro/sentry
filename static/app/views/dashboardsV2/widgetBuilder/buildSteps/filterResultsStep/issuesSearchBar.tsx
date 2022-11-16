@@ -1,13 +1,9 @@
 import {ClassNames} from '@emotion/react';
 import styled from '@emotion/styled';
 
-import {fetchTagValues} from 'sentry/actionCreators/tags';
 import {SearchBarProps} from 'sentry/components/events/searchBar';
 import {t} from 'sentry/locale';
-import {Organization, PageFilters, SavedSearchType, TagCollection} from 'sentry/types';
-import {getUtcDateString} from 'sentry/utils/dates';
-import useApi from 'sentry/utils/useApi';
-import withIssueTags from 'sentry/utils/withIssueTags';
+import {Organization} from 'sentry/types';
 import {WidgetQuery} from 'sentry/views/dashboardsV2/types';
 import {
   MAX_MENU_HEIGHT,
@@ -16,54 +12,22 @@ import {
 import IssueListSearchBar from 'sentry/views/issueList/searchBar';
 
 interface Props {
-  onBlur: SearchBarProps['onBlur'];
-  onSearch: SearchBarProps['onSearch'];
+  onClose: SearchBarProps['onClose'];
   organization: Organization;
-  query: WidgetQuery;
-  selection: PageFilters;
-  tags: TagCollection;
-  searchSource?: string;
+  widgetQuery: WidgetQuery;
 }
 
-function IssuesSearchBarContainer({
-  tags,
-  onSearch,
-  onBlur,
-  organization,
-  query,
-  selection,
-  searchSource,
-}: Props) {
-  const api = useApi();
-  function tagValueLoader(key: string, search: string) {
-    const orgId = organization.slug;
-    const projectIds = selection.projects.map(id => id.toString());
-    const endpointParams = {
-      start: getUtcDateString(selection.datetime.start),
-      end: getUtcDateString(selection.datetime.end),
-      statsPeriod: selection.datetime.period,
-    };
-
-    return fetchTagValues(api, orgId, key, search, projectIds, endpointParams);
-  }
-
+function IssuesSearchBar({onClose, widgetQuery, organization}: Props) {
   return (
     <ClassNames>
       {({css}) => (
         <StyledIssueListSearchBar
-          searchSource={searchSource}
+          searchSource="widget_builder"
           organization={organization}
-          query={query.conditions || ''}
-          sort=""
-          onSearch={onSearch}
-          onBlur={onBlur}
-          excludeEnvironment
-          supportedTags={tags}
+          query={widgetQuery.conditions || ''}
+          onClose={onClose}
           placeholder={t('Search for issues, status, assigned, and more')}
-          tagValueLoader={tagValueLoader}
-          onSidebarToggle={() => undefined}
           maxSearchItems={MAX_SEARCH_ITEMS}
-          savedSearchType={SavedSearchType.ISSUE}
           dropdownClassName={css`
             max-height: ${MAX_MENU_HEIGHT}px;
             overflow-y: auto;
@@ -73,8 +37,6 @@ function IssuesSearchBarContainer({
     </ClassNames>
   );
 }
-
-const IssuesSearchBar = withIssueTags(IssuesSearchBarContainer);
 
 export {IssuesSearchBar};
 

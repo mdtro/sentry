@@ -1,5 +1,4 @@
 import {forwardRef} from 'react';
-import {withRouter, WithRouterProps} from 'react-router';
 import styled from '@emotion/styled';
 import {motion} from 'framer-motion';
 import moment from 'moment';
@@ -12,10 +11,13 @@ import LetterAvatar from 'sentry/components/letterAvatar';
 import Tooltip from 'sentry/components/tooltip';
 import {IconCheckmark, IconClose, IconLock, IconSync} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
+import DemoWalkthroughStore from 'sentry/stores/demoWalkthroughStore';
 import space from 'sentry/styles/space';
 import {AvatarUser, OnboardingTask, OnboardingTaskKey, Organization} from 'sentry/types';
 import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+import {isDemoWalkthrough} from 'sentry/utils/demoMode';
 import testableTransition from 'sentry/utils/testableTransition';
+import {useRouteContext} from 'sentry/utils/useRouteContext';
 import withOrganization from 'sentry/utils/withOrganization';
 
 import SkipConfirm from './skipConfirm';
@@ -33,7 +35,7 @@ const recordAnalytics = (
     action,
   });
 
-type Props = WithRouterProps & {
+type Props = {
   forwardedRef: React.Ref<HTMLDivElement>;
   /**
    * Fired when a task is completed. This will typically happen if there is a
@@ -52,7 +54,10 @@ type Props = WithRouterProps & {
   task: OnboardingTask;
 };
 
-function Task({router, task, onSkip, onMarkComplete, forwardedRef, organization}: Props) {
+function Task(props: Props) {
+  const {task, onSkip, onMarkComplete, forwardedRef, organization} = props;
+  const routeContext = useRouteContext();
+  const {router} = routeContext;
   const handleSkip = () => {
     recordAnalytics(task, organization, 'skipped');
     onSkip(task.task);
@@ -62,12 +67,16 @@ function Task({router, task, onSkip, onMarkComplete, forwardedRef, organization}
     recordAnalytics(task, organization, 'clickthrough');
     e.stopPropagation();
 
+    if (isDemoWalkthrough()) {
+      DemoWalkthroughStore.activateGuideAnchor(task.task);
+    }
+
     if (task.actionType === 'external') {
       window.open(task.location, '_blank');
     }
 
     if (task.actionType === 'action') {
-      task.action();
+      task.action(routeContext);
     }
 
     if (task.actionType === 'app') {
@@ -155,7 +164,7 @@ function Task({router, task, onSkip, onMarkComplete, forwardedRef, organization}
           {task.status === 'pending' ? (
             <InProgressIndicator user={task.user} />
           ) : (
-            <Button priority="primary" size="small">
+            <Button priority="primary" size="sm">
               {t('Start')}
             </Button>
           )}
@@ -285,7 +294,7 @@ TaskBlankAvatar.defaultProps = {
   transition,
 };
 
-const WrappedTask = withOrganization(withRouter(Task));
+const WrappedTask = withOrganization(Task);
 
 export default forwardRef<
   HTMLDivElement,

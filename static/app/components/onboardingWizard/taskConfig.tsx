@@ -1,8 +1,10 @@
 import styled from '@emotion/styled';
 
 import {openInviteMembersModal} from 'sentry/actionCreators/modal';
+import {navigateTo} from 'sentry/actionCreators/navigation';
 import {Client} from 'sentry/api';
 import {taskIsDone} from 'sentry/components/onboardingWizard/utils';
+import {filterProjects} from 'sentry/components/performanceOnboarding/utils';
 import {sourceMaps} from 'sentry/data/platformCategories';
 import {t} from 'sentry/locale';
 import pulsingIndicatorStyles from 'sentry/styles/pulsingIndicator';
@@ -15,12 +17,13 @@ import {
   Organization,
   Project,
 } from 'sentry/types';
+import {isDemoWalkthrough} from 'sentry/utils/demoMode';
 import EventWaiter from 'sentry/utils/eventWaiter';
+import projectSupportsReplay from 'sentry/utils/replays/projectSupportsReplay';
 import withApi from 'sentry/utils/withApi';
-import {OnboardingState} from 'sentry/views/onboarding/targetedOnboarding/types';
+import {OnboardingState} from 'sentry/views/onboarding/types';
 
-import IntegrationCard from './integrationCard';
-import OnboardingProjectsCard from './onboardingCard';
+import OnboardingProjectsCard from './onboardingProjectsCard';
 
 function hasPlatformWithSourceMaps(projects: Project[] | undefined) {
   return projects !== undefined
@@ -73,6 +76,56 @@ export function getOnboardingTasks({
   projects,
   onboardingState,
 }: Options): OnboardingTaskDescriptor[] {
+  if (isDemoWalkthrough()) {
+    return [
+      {
+        task: OnboardingTaskKey.SIDEBAR_GUIDE,
+        title: t('Check out the different tabs'),
+        description: t('Press the start button for a guided tour through each tab.'),
+        skippable: false,
+        requisites: [],
+        actionType: 'app',
+        location: `/organizations/${organization.slug}/projects/`,
+        display: true,
+      },
+      {
+        task: OnboardingTaskKey.ISSUE_GUIDE,
+        title: t('Issues'),
+        description: t(
+          'Here’s a list of errors and performance problems. And everything you need to know to fix it.'
+        ),
+        skippable: false,
+        requisites: [],
+        actionType: 'app',
+        location: `/organizations/${organization.slug}/issues/`,
+        display: true,
+      },
+      {
+        task: OnboardingTaskKey.PERFORMANCE_GUIDE,
+        title: t('Performance'),
+        description: t(
+          'See slow fast. Trace slow-loading pages back to their API calls as well as all related errors'
+        ),
+        skippable: false,
+        requisites: [],
+        actionType: 'app',
+        location: `/organizations/${organization.slug}/performance/`,
+        display: true,
+      },
+      {
+        task: OnboardingTaskKey.RELEASE_GUIDE,
+        title: t('Releases'),
+        description: t(
+          'Track the health of every release. See differences between releases from crash analytics to adoption rates.'
+        ),
+        skippable: false,
+        requisites: [],
+        actionType: 'app',
+        location: `/organizations/${organization.slug}/releases/`,
+        display: true,
+      },
+    ];
+  }
   return [
     {
       task: OnboardingTaskKey.FIRST_PROJECT,
@@ -133,7 +186,7 @@ export function getOnboardingTasks({
       requisites: [OnboardingTaskKey.FIRST_PROJECT, OnboardingTaskKey.FIRST_EVENT],
       actionType: 'app',
       location: `/settings/${organization.slug}/integrations/`,
-      display: (onboardingState?.selectedIntegrations.length ?? 0) === 0,
+      display: true,
     },
     {
       task: OnboardingTaskKey.SECOND_PLATFORM,
@@ -155,8 +208,45 @@ export function getOnboardingTasks({
       ),
       skippable: true,
       requisites: [OnboardingTaskKey.FIRST_PROJECT],
-      actionType: 'external',
-      location: 'https://docs.sentry.io/product/performance/getting-started/',
+      actionType: 'action',
+      action: ({router}) => {
+        // Use `features?.` because getsentry has a different `Organization` type/payload
+        if (!organization.features?.includes('performance-onboarding-checklist')) {
+          window.open(
+            'https://docs.sentry.io/product/performance/getting-started/',
+            '_blank'
+          );
+          return;
+        }
+
+        // TODO: add analytics here for this specific action.
+
+        if (!projects) {
+          navigateTo(`/organizations/${organization.slug}/performance/`, router);
+          return;
+        }
+
+        const {projectsWithoutFirstTransactionEvent, projectsForOnboarding} =
+          filterProjects(projects);
+
+        if (projectsWithoutFirstTransactionEvent.length <= 0) {
+          navigateTo(`/organizations/${organization.slug}/performance/`, router);
+          return;
+        }
+
+        if (projectsForOnboarding.length) {
+          navigateTo(
+            `/organizations/${organization.slug}/performance/?project=${projectsForOnboarding[0].id}#performance-sidequest`,
+            router
+          );
+          return;
+        }
+
+        navigateTo(
+          `/organizations/${organization.slug}/performance/?project=${projectsWithoutFirstTransactionEvent[0].id}#performance-sidequest`,
+          router
+        );
+      },
       display: true,
       SupplementComponent: withApi(({api, task, onCompleteTask}: FirstEventWaiterProps) =>
         !!projects?.length && task.requisiteTasks.length === 0 && !task.completionSeen ? (
@@ -184,6 +274,34 @@ export function getOnboardingTasks({
       location:
         'https://docs.sentry.io/platform-redirect/?next=/enriching-events/identify-user/',
       display: true,
+    },
+    {
+      task: OnboardingTaskKey.SESSION_REPLAY,
+      title: t('See a video-like reproduction'),
+      description: t(
+        'Get to the root cause of error or latency issues faster by seeing all the technical details related to those issues in video-like reproductions of your user sessions.'
+      ),
+      skippable: true,
+      requisites: [OnboardingTaskKey.FIRST_PROJECT, OnboardingTaskKey.FIRST_EVENT],
+      actionType: 'app',
+      location: `/organizations/${organization.slug}/replays/#replay-sidequest`,
+      display:
+        // Use `features?.` because getsentry has a different `Organization` type/payload
+        organization.features?.includes('session-replay-ui') &&
+        Boolean(projects?.some(projectSupportsReplay)),
+      SupplementComponent: withApi(({api, task, onCompleteTask}: FirstEventWaiterProps) =>
+        !!projects?.length && task.requisiteTasks.length === 0 && !task.completionSeen ? (
+          <EventWaiter
+            api={api}
+            organization={organization}
+            project={projects[0]}
+            eventType="replay"
+            onIssueReceived={() => !taskIsDone(task) && onCompleteTask()}
+          >
+            {() => <EventWaitingIndicator text={t('Waiting for user session')} />}
+          </EventWaiter>
+        ) : null
+      ),
     },
     {
       task: OnboardingTaskKey.RELEASE_TRACKING,
@@ -255,6 +373,7 @@ export function getOnboardingTasks({
       requisites: [OnboardingTaskKey.FIRST_PROJECT, OnboardingTaskKey.FIRST_TRANSACTION],
       actionType: 'app',
       location: getMetricAlertUrl({projects, organization, onboardingState}),
+      // Use `features?.` because getsentry has a different `Organization` type/payload
       display: organization.features?.includes('incidents'),
     },
     {
@@ -267,18 +386,6 @@ export function getOnboardingTasks({
       action: () => {},
       display: true,
       renderCard: OnboardingProjectsCard,
-    },
-    {
-      task: OnboardingTaskKey.INTEGRATIONS,
-      title: t('Integrations to Setup'),
-      description: '',
-      skippable: true,
-      requisites: [],
-      actionType: 'action',
-      action: () => {},
-      display: !!organization.experiments?.TargetedOnboardingIntegrationSelectExperiment,
-      serverTask: OnboardingTaskKey.FIRST_INTEGRATION,
-      renderCard: IntegrationCard,
     },
   ];
 }
@@ -314,12 +421,14 @@ const PulsingIndicator = styled('div')`
   margin-right: ${space(1)};
 `;
 
-const EventWaitingIndicator = styled((p: React.HTMLAttributes<HTMLDivElement>) => (
-  <div {...p}>
-    <PulsingIndicator />
-    {t('Waiting for event')}
-  </div>
-))`
+const EventWaitingIndicator = styled(
+  (p: React.HTMLAttributes<HTMLDivElement> & {text?: string}) => (
+    <div {...p}>
+      <PulsingIndicator />
+      {p.text || t('Waiting for event')}
+    </div>
+  )
+)`
   display: flex;
   align-items: center;
   flex-grow: 1;

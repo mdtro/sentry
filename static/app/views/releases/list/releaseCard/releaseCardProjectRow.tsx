@@ -104,8 +104,9 @@ function ReleaseCardProjectRow({
     adoptionStages?.[project.slug].stage;
 
   const adoptionStageLabel =
-    Boolean(get24hCountByProject && adoptionStage && isMobileRelease(project.platform)) &&
-    ADOPTION_STAGE_LABELS[adoptionStage];
+    get24hCountByProject && adoptionStage && isMobileRelease(project.platform)
+      ? ADOPTION_STAGE_LABELS[adoptionStage]
+      : null;
 
   return (
     <ProjectRow data-test-id="release-card-project-row">
@@ -210,7 +211,7 @@ function ReleaseCardProjectRow({
         <ViewColumn>
           <GuideAnchor disabled={!isTopRelease || index !== 0} target="view_release">
             <Button
-              size="xsmall"
+              size="xs"
               to={{
                 pathname: `/organizations/${
                   organization.slug

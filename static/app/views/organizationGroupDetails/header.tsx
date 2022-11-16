@@ -1,89 +1,119 @@
-import {Component, Fragment} from 'react';
-import {withRouter, WithRouterProps} from 'react-router';
+import {useCallback, useEffect, useMemo, useState} from 'react';
 import styled from '@emotion/styled';
 import omit from 'lodash/omit';
 
 import {fetchOrgMembers} from 'sentry/actionCreators/members';
-import {Client} from 'sentry/api';
-import Feature from 'sentry/components/acl/feature';
 import AssigneeSelector from 'sentry/components/assigneeSelector';
 import GuideAnchor from 'sentry/components/assistant/guideAnchor';
 import Badge from 'sentry/components/badge';
 import Breadcrumbs from 'sentry/components/breadcrumbs';
 import Count from 'sentry/components/count';
+import EnvironmentPageFilter from 'sentry/components/environmentPageFilter';
 import EventOrGroupTitle from 'sentry/components/eventOrGroupTitle';
 import ErrorLevel from 'sentry/components/events/errorLevel';
-import EventAnnotation from 'sentry/components/events/eventAnnotation';
 import EventMessage from 'sentry/components/events/eventMessage';
 import InboxReason from 'sentry/components/group/inboxBadges/inboxReason';
 import UnhandledInboxTag from 'sentry/components/group/inboxBadges/unhandledTag';
-import IdBadge from 'sentry/components/idBadge';
 import ProjectBadge from 'sentry/components/idBadge/projectBadge';
 import * as Layout from 'sentry/components/layouts/thirds';
-import ExternalLink from 'sentry/components/links/externalLink';
 import Link from 'sentry/components/links/link';
-import ListLink from 'sentry/components/links/listLink';
-import NavTabs from 'sentry/components/navTabs';
+import ReplaysFeatureBadge from 'sentry/components/replays/replaysFeatureBadge';
 import SeenByList from 'sentry/components/seenByList';
 import ShortId from 'sentry/components/shortId';
+import {Item, TabList} from 'sentry/components/tabs';
 import Tooltip from 'sentry/components/tooltip';
 import {IconChat} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
-import {Group, Organization, Project} from 'sentry/types';
-import {Event} from 'sentry/types/event';
+import {Event, Group, IssueCategory, Organization, Project, User} from 'sentry/types';
+import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+import {getUtcDateString} from 'sentry/utils/dates';
 import {getMessage} from 'sentry/utils/events';
-import withApi from 'sentry/utils/withApi';
-import withOrganization from 'sentry/utils/withOrganization';
+import projectSupportsReplay from 'sentry/utils/replays/projectSupportsReplay';
+import useApi from 'sentry/utils/useApi';
+import {useLocation} from 'sentry/utils/useLocation';
 
 import GroupActions from './actions';
 import {Tab} from './types';
 import {TagAndMessageWrapper} from './unhandledTag';
 import {ReprocessingStatus} from './utils';
 
-type Props = WithRouterProps & {
-  api: Client;
+type Props = {
   baseUrl: string;
-  currentTab: string;
   group: Group;
   groupReprocessingStatus: ReprocessingStatus;
   organization: Organization;
   project: Project;
-  replaysCount: number | null;
+  replaysCount: number | undefined;
   event?: Event;
 };
 
-type MemberList = NonNullable<
-  React.ComponentProps<typeof AssigneeSelector>['memberList']
->;
-
-type State = {
-  memberList?: MemberList;
+type UseMemberlistProps = {
+  group: Group;
+  organization: Organization;
 };
 
-class GroupHeader extends Component<Props, State> {
-  state: State = {};
+function useMembersList({group, organization}: UseMemberlistProps) {
+  const {project} = group;
+  const api = useApi();
 
-  componentDidMount() {
-    const {group, api, organization} = this.props;
-    const {project} = group;
+  const [membersList, setMembersList] = useState<User[]>();
 
-    fetchOrgMembers(api, organization.slug, [project.id]).then(memberList => {
-      const users = memberList.map(member => member.user);
-      this.setState({memberList: users});
-    });
-  }
+  const hasIssueDetailsOwners = organization.features.includes('issue-details-owners');
+  const loadMemberList = useCallback(async () => {
+    if (hasIssueDetailsOwners) {
+      return;
+    }
 
-  getDisabledTabs() {
-    const {organization} = this.props;
+    const members = await fetchOrgMembers(api, organization.slug, [project.id]);
+    setMembersList(members.map(member => member.user));
+  }, [api, organization.slug, project, hasIssueDetailsOwners]);
 
+  useEffect(() => void loadMemberList(), [loadMemberList]);
+
+  return membersList;
+}
+
+function GroupHeader({
+  baseUrl,
+  group,
+  groupReprocessingStatus,
+  organization,
+  replaysCount,
+  event,
+  project,
+}: Props) {
+  const location = useLocation();
+
+  const trackAssign: React.ComponentProps<typeof AssigneeSelector>['onAssign'] =
+    useCallback(
+      (_, __, suggestedAssignee) => {
+        const {alert_date, alert_rule_id, alert_type} = location.query;
+        trackAdvancedAnalyticsEvent('issue_details.action_clicked', {
+          organization,
+          project_id: parseInt(project.id, 10),
+          group_id: parseInt(group.id, 10),
+          issue_category: group.issueCategory,
+          action_type: 'assign',
+          assigned_suggestion_reason: suggestedAssignee?.suggestedReason,
+          // Alert properties track if the user came from email/slack alerts
+          alert_date:
+            typeof alert_date === 'string'
+              ? getUtcDateString(Number(alert_date))
+              : undefined,
+          alert_rule_id: typeof alert_rule_id === 'string' ? alert_rule_id : undefined,
+          alert_type: typeof alert_type === 'string' ? alert_type : undefined,
+        });
+      },
+      [group.id, group.issueCategory, project.id, organization, location.query]
+    );
+
+  const disabledTabs = useMemo(() => {
     const hasReprocessingV2Feature = organization.features.includes('reprocessing-v2');
 
     if (!hasReprocessingV2Feature) {
       return [];
     }
-
-    const {groupReprocessingStatus} = this.props;
 
     if (groupReprocessingStatus === ReprocessingStatus.REPROCESSING) {
       return [
@@ -112,361 +142,318 @@ class GroupHeader extends Component<Props, State> {
     }
 
     return [];
-  }
+  }, [organization, groupReprocessingStatus]);
 
-  render() {
-    const {
-      project,
-      group,
-      currentTab,
-      baseUrl,
-      event,
-      organization,
-      location,
-      replaysCount,
-    } = this.props;
+  const eventRouteToObject = useMemo(() => {
+    const searchTermWithoutQuery = omit(location.query, 'query');
+    return {
+      pathname: `${baseUrl}events/`,
+      query: searchTermWithoutQuery,
+    };
+  }, [location, baseUrl]);
+
+  const errorIssueTabs = useMemo(() => {
     const projectFeatures = new Set(project ? project.features : []);
     const organizationFeatures = new Set(organization ? organization.features : []);
-    const userCount = group.userCount;
 
     const hasGroupingTreeUI = organizationFeatures.has('grouping-tree-ui');
     const hasSimilarView = projectFeatures.has('similarity-view');
     const hasEventAttachments = organizationFeatures.has('event-attachments');
-    const hasIssueIdBreadcrumbs = organizationFeatures.has('issue-id-breadcrumbs');
-
-    let className = 'group-detail';
-
-    if (group.hasSeen) {
-      className += ' hasSeen';
-    }
-
-    if (group.status === 'resolved') {
-      className += ' isResolved';
-    }
-
-    const {memberList} = this.state;
-    const orgId = organization.slug;
-    const message = getMessage(group);
-
-    const searchTermWithoutQuery = omit(location.query, 'query');
-    const eventRouteToObject = {
-      pathname: `${baseUrl}events/`,
-      query: searchTermWithoutQuery,
-    };
-
-    const disabledTabs = this.getDisabledTabs();
-    const disableActions = !!disabledTabs.length;
-
-    const shortIdBreadCrumb = group.shortId && (
-      <GuideAnchor target="issue_number" position="bottom">
-        <IssueBreadcrumbWrapper>
-          <BreadcrumbProjectBadge
-            project={project}
-            avatarSize={16}
-            hideName
-            avatarProps={{hasTooltip: true, tooltip: project.slug}}
-          />
-          <StyledTooltip
-            className="help-link"
-            title={t(
-              'This identifier is unique across your organization, and can be used to reference an issue in various places, like commit messages.'
-            )}
-            position="bottom"
-          >
-            <StyledShortId shortId={group.shortId} />
-          </StyledTooltip>
-        </IssueBreadcrumbWrapper>
-      </GuideAnchor>
-    );
+    const hasSessionReplay =
+      organizationFeatures.has('session-replay-ui') && projectSupportsReplay(project);
 
     return (
-      <Layout.Header>
-        <div className={className}>
-          <StyledBreadcrumbs
+      <StyledTabList hideBorder>
+        <Item
+          key={Tab.DETAILS}
+          disabled={disabledTabs.includes(Tab.DETAILS)}
+          to={`${baseUrl}${location.search}`}
+        >
+          {t('Details')}
+        </Item>
+        <Item
+          key={Tab.ACTIVITY}
+          textValue={t('Activity')}
+          disabled={disabledTabs.includes(Tab.ACTIVITY)}
+          to={`${baseUrl}activity/${location.search}`}
+        >
+          {t('Activity')}
+          <IconBadge>
+            {group.numComments}
+            <IconChat size="xs" />
+          </IconBadge>
+        </Item>
+        <Item
+          key={Tab.USER_FEEDBACK}
+          textValue={t('User Feedback')}
+          disabled={disabledTabs.includes(Tab.USER_FEEDBACK)}
+          to={`${baseUrl}feedback/${location.search}`}
+        >
+          {t('User Feedback')} <Badge text={group.userReportCount} />
+        </Item>
+        <Item
+          key={Tab.ATTACHMENTS}
+          hidden={!hasEventAttachments}
+          disabled={disabledTabs.includes(Tab.ATTACHMENTS)}
+          to={`${baseUrl}attachments/${location.search}`}
+        >
+          {t('Attachments')}
+        </Item>
+        <Item
+          key={Tab.TAGS}
+          disabled={disabledTabs.includes(Tab.TAGS)}
+          to={`${baseUrl}tags/${location.search}`}
+        >
+          {t('Tags')}
+        </Item>
+        <Item
+          key={Tab.EVENTS}
+          disabled={disabledTabs.includes(Tab.EVENTS)}
+          to={eventRouteToObject}
+        >
+          {t('All Events')}
+        </Item>
+        <Item
+          key={Tab.MERGED}
+          disabled={disabledTabs.includes(Tab.MERGED)}
+          to={`${baseUrl}merged/${location.search}`}
+        >
+          {t('Merged Issues')}
+        </Item>
+        <Item
+          key={Tab.GROUPING}
+          hidden={!hasGroupingTreeUI}
+          disabled={disabledTabs.includes(Tab.GROUPING)}
+          to={`${baseUrl}grouping/${location.search}`}
+        >
+          {t('Grouping')}
+        </Item>
+        <Item
+          key={Tab.SIMILAR_ISSUES}
+          hidden={!hasSimilarView}
+          disabled={disabledTabs.includes(Tab.SIMILAR_ISSUES)}
+          to={`${baseUrl}similar/${location.search}`}
+        >
+          {t('Similar Issues')}
+        </Item>
+        <Item
+          key={Tab.REPLAYS}
+          textValue={t('Replays')}
+          hidden={!hasSessionReplay}
+          to={`${baseUrl}replays/${location.search}`}
+        >
+          {t('Replays')}{' '}
+          {replaysCount !== undefined ? <Badge text={replaysCount} /> : null}
+          <ReplaysFeatureBadge noTooltip />
+        </Item>
+      </StyledTabList>
+    );
+  }, [
+    baseUrl,
+    location,
+    disabledTabs,
+    group.numComments,
+    group.userReportCount,
+    organization,
+    project,
+    replaysCount,
+    eventRouteToObject,
+  ]);
+
+  const performanceIssueTabs = useMemo(() => {
+    return (
+      <StyledTabList hideBorder>
+        <Item
+          key={Tab.DETAILS}
+          disabled={disabledTabs.includes(Tab.DETAILS)}
+          to={`${baseUrl}${location.search}`}
+        >
+          {t('Details')}
+        </Item>
+        <Item
+          key={Tab.ACTIVITY}
+          textValue={t('Activity')}
+          disabled={disabledTabs.includes(Tab.ACTIVITY)}
+          to={`${baseUrl}activity/${location.search}`}
+        >
+          {t('Activity')}
+          <IconBadge>
+            {group.numComments}
+            <IconChat size="xs" />
+          </IconBadge>
+        </Item>
+        <Item
+          key={Tab.TAGS}
+          disabled={disabledTabs.includes(Tab.TAGS)}
+          to={`${baseUrl}tags/${location.search}`}
+        >
+          {t('Tags')}
+        </Item>
+        <Item
+          key={Tab.EVENTS}
+          disabled={disabledTabs.includes(Tab.EVENTS)}
+          to={eventRouteToObject}
+        >
+          {t('Events')}
+        </Item>
+      </StyledTabList>
+    );
+  }, [disabledTabs, group.numComments, baseUrl, location, eventRouteToObject]);
+
+  const membersList = useMembersList({group, organization});
+  const hasIssueDetailsOwners = organization.features.includes('issue-details-owners');
+  const {userCount} = group;
+
+  let className = 'group-detail';
+
+  if (group.hasSeen) {
+    className += ' hasSeen';
+  }
+
+  if (group.status === 'resolved') {
+    className += ' isResolved';
+  }
+
+  const message = getMessage(group);
+
+  const disableActions = !!disabledTabs.length;
+
+  const shortIdBreadCrumb = group.shortId && (
+    <GuideAnchor target="issue_number" position="bottom">
+      <ShortIdBreadrcumb>
+        <ProjectBadge
+          project={project}
+          avatarSize={16}
+          hideName
+          avatarProps={{hasTooltip: true, tooltip: project.slug}}
+        />
+        <Tooltip
+          className="help-link"
+          title={t(
+            'This identifier is unique across your organization, and can be used to reference an issue in various places, like commit messages.'
+          )}
+          position="bottom"
+        >
+          <StyledShortId shortId={group.shortId} />
+        </Tooltip>
+      </ShortIdBreadrcumb>
+    </GuideAnchor>
+  );
+
+  const hasIssueActionsV2 = organization.features.includes('issue-actions-v2');
+
+  return (
+    <Layout.Header>
+      <div className={className}>
+        <BreadcrumbActionWrapper>
+          <Breadcrumbs
             crumbs={[
-              {label: 'Issues', to: `/organizations/${orgId}/issues/${location.search}`},
               {
-                label: hasIssueIdBreadcrumbs ? shortIdBreadCrumb : t('Issue Details'),
+                label: 'Issues',
+                to: `/organizations/${organization.slug}/issues/${location.search}`,
               },
+              {label: shortIdBreadCrumb},
             ]}
           />
-          <div className="row">
-            <div className="col-sm-7">
-              <TitleWrapper>
-                {!hasIssueIdBreadcrumbs && (
-                  <StyledIdBadge
-                    project={project}
-                    avatarSize={24}
-                    hideName
-                    avatarProps={{hasTooltip: true, tooltip: project.slug}}
-                  />
-                )}
-                <h3>
-                  <EventOrGroupTitle hasGuideAnchor data={group} />
-                </h3>
-                {group.inbox && (
-                  <InboxReasonWrapper>
-                    <InboxReason inbox={group.inbox} fontSize="md" />
-                  </InboxReasonWrapper>
-                )}
-              </TitleWrapper>
-              <StyledTagAndMessageWrapper>
-                {group.level && <ErrorLevel level={group.level} size="11px" />}
-                {group.isUnhandled && <UnhandledInboxTag />}
-                <EventMessage
-                  message={message}
-                  annotations={
-                    <Fragment>
-                      {group.logger && (
-                        <EventAnnotationWithSpace>
-                          <Link
-                            to={{
-                              pathname: `/organizations/${orgId}/issues/`,
-                              query: {query: 'logger:' + group.logger},
-                            }}
-                          >
-                            {group.logger}
-                          </Link>
-                        </EventAnnotationWithSpace>
-                      )}
-                      {group.annotations.map((annotation, i) => (
-                        <EventAnnotationWithSpace
-                          key={i}
-                          dangerouslySetInnerHTML={{__html: annotation}}
-                        />
-                      ))}
-                    </Fragment>
-                  }
-                />
-              </StyledTagAndMessageWrapper>
+          {hasIssueActionsV2 && (
+            <GroupActions
+              group={group}
+              project={project}
+              disabled={disableActions}
+              event={event}
+              query={location.query}
+            />
+          )}
+        </BreadcrumbActionWrapper>
+        <HeaderRow>
+          <TitleWrapper>
+            <TitleHeading>
+              <h3>
+                <StyledEventOrGroupTitle hasGuideAnchor data={group} />
+              </h3>
+              {group.inbox && <InboxReason inbox={group.inbox} fontSize="md" />}
+            </TitleHeading>
+            <StyledTagAndMessageWrapper>
+              {group.level && <ErrorLevel level={group.level} size="11px" />}
+              {group.isUnhandled && <UnhandledInboxTag />}
+              <EventMessage message={message} />
+            </StyledTagAndMessageWrapper>
+          </TitleWrapper>
+          <StatsWrapper numItems={hasIssueDetailsOwners ? '2' : '3'}>
+            <div className="count">
+              <h6 className="nav-header">{t('Events')}</h6>
+              <Link disabled={disableActions} to={eventRouteToObject}>
+                <Count className="count" value={group.count} />
+              </Link>
             </div>
-
-            {hasIssueIdBreadcrumbs ? (
-              <StatsWrapper>
-                <div className="count align-right m-l-1">
-                  <h6 className="nav-header">{t('Events')}</h6>
-                  {disableActions ? (
-                    <Count className="count" value={group.count} />
-                  ) : (
-                    <Link to={eventRouteToObject}>
-                      <Count className="count" value={group.count} />
-                    </Link>
-                  )}
-                </div>
-                <div className="count align-right m-l-1">
-                  <h6 className="nav-header">{t('Users')}</h6>
-                  {userCount !== 0 ? (
-                    disableActions ? (
-                      <Count className="count" value={userCount} />
-                    ) : (
-                      <Link to={`${baseUrl}tags/user/${location.search}`}>
-                        <Count className="count" value={userCount} />
-                      </Link>
-                    )
-                  ) : (
-                    <span>0</span>
-                  )}
-                </div>
-                <div className="assigned-to m-l-1">
-                  <h6 className="nav-header">{t('Assignee')}</h6>
-                  <AssigneeSelector
-                    id={group.id}
-                    memberList={memberList}
-                    disabled={disableActions}
-                  />
-                </div>
-              </StatsWrapper>
-            ) : (
-              <div className="col-sm-5 stats">
-                <div className="flex flex-justify-right">
-                  {group.shortId && (
-                    <GuideAnchor target="issue_number" position="bottom">
-                      <div className="short-id-box count align-right">
-                        <h6 className="nav-header">
-                          <Tooltip
-                            className="help-link"
-                            showUnderline
-                            title={t(
-                              'This identifier is unique across your organization, and can be used to reference an issue in various places, like commit messages.'
-                            )}
-                            position="bottom"
-                          >
-                            <ExternalLink href="https://docs.sentry.io/product/integrations/source-code-mgmt/github/#resolve-via-commit-or-pull-request">
-                              {t('Issue #')}
-                            </ExternalLink>
-                          </Tooltip>
-                        </h6>
-                        <ShortId
-                          shortId={group.shortId}
-                          avatar={
-                            <StyledProjectBadge
-                              project={project}
-                              avatarSize={20}
-                              hideName
-                            />
-                          }
-                        />
-                      </div>
-                    </GuideAnchor>
-                  )}
-                  <div className="count align-right m-l-1">
-                    <h6 className="nav-header">{t('Events')}</h6>
-                    {disableActions ? (
-                      <Count className="count" value={group.count} />
-                    ) : (
-                      <Link to={eventRouteToObject}>
-                        <Count className="count" value={group.count} />
-                      </Link>
-                    )}
-                  </div>
-                  <div className="count align-right m-l-1">
-                    <h6 className="nav-header">{t('Users')}</h6>
-                    {userCount !== 0 ? (
-                      disableActions ? (
-                        <Count className="count" value={userCount} />
-                      ) : (
-                        <Link to={`${baseUrl}tags/user/${location.search}`}>
-                          <Count className="count" value={userCount} />
-                        </Link>
-                      )
-                    ) : (
-                      <span>0</span>
-                    )}
-                  </div>
-                  <div className="assigned-to m-l-1">
-                    <h6 className="nav-header">{t('Assignee')}</h6>
-                    <AssigneeSelector
-                      id={group.id}
-                      memberList={memberList}
-                      disabled={disableActions}
-                    />
-                  </div>
-                </div>
+            <div className="count">
+              <h6 className="nav-header">{t('Users')}</h6>
+              {userCount !== 0 ? (
+                <Link
+                  disabled={disableActions}
+                  to={`${baseUrl}tags/user/${location.search}`}
+                >
+                  <Count className="count" value={userCount} />
+                </Link>
+              ) : (
+                <span>0</span>
+              )}
+            </div>
+            {!hasIssueDetailsOwners && (
+              <div data-test-id="assigned-to">
+                <h6 className="nav-header">{t('Assignee')}</h6>
+                <AssigneeSelector
+                  id={group.id}
+                  memberList={membersList}
+                  disabled={disableActions}
+                  onAssign={trackAssign}
+                />
               </div>
             )}
-          </div>
-          <SeenByList
-            seenBy={group.seenBy}
-            iconTooltip={t('People who have viewed this issue')}
-          />
-          <GroupActions
-            group={group}
-            project={project}
-            disabled={disableActions}
-            event={event}
-            query={location.query}
-          />
-          <NavTabs>
-            <ListLink
-              to={`${baseUrl}${location.search}`}
-              isActive={() => currentTab === Tab.DETAILS}
-              disabled={disabledTabs.includes(Tab.DETAILS)}
-            >
-              {t('Details')}
-            </ListLink>
-            <StyledListLink
-              to={`${baseUrl}activity/${location.search}`}
-              isActive={() => currentTab === Tab.ACTIVITY}
-              disabled={disabledTabs.includes(Tab.ACTIVITY)}
-            >
-              {t('Activity')}
-              <Badge>
-                {group.numComments}
-                <IconChat size="xs" />
-              </Badge>
-            </StyledListLink>
-            <StyledListLink
-              to={`${baseUrl}feedback/${location.search}`}
-              isActive={() => currentTab === Tab.USER_FEEDBACK}
-              disabled={disabledTabs.includes(Tab.USER_FEEDBACK)}
-            >
-              {t('User Feedback')} <Badge text={group.userReportCount} />
-            </StyledListLink>
-            {hasEventAttachments && (
-              <ListLink
-                to={`${baseUrl}attachments/${location.search}`}
-                isActive={() => currentTab === Tab.ATTACHMENTS}
-                disabled={disabledTabs.includes(Tab.ATTACHMENTS)}
-              >
-                {t('Attachments')}
-              </ListLink>
-            )}
-            <ListLink
-              to={`${baseUrl}tags/${location.search}`}
-              isActive={() => currentTab === Tab.TAGS}
-              disabled={disabledTabs.includes(Tab.TAGS)}
-            >
-              {t('Tags')}
-            </ListLink>
-            <ListLink
-              to={eventRouteToObject}
-              isActive={() => currentTab === Tab.EVENTS}
-              disabled={disabledTabs.includes(Tab.EVENTS)}
-            >
-              {t('Events')}
-            </ListLink>
-            <ListLink
-              to={`${baseUrl}merged/${location.search}`}
-              isActive={() => currentTab === Tab.MERGED}
-              disabled={disabledTabs.includes(Tab.MERGED)}
-            >
-              {t('Merged Issues')}
-            </ListLink>
-            {hasGroupingTreeUI && (
-              <ListLink
-                to={`${baseUrl}grouping/${location.search}`}
-                isActive={() => currentTab === Tab.GROUPING}
-                disabled={disabledTabs.includes(Tab.GROUPING)}
-              >
-                {t('Grouping')}
-              </ListLink>
-            )}
-            {hasSimilarView && (
-              <ListLink
-                to={`${baseUrl}similar/${location.search}`}
-                isActive={() => currentTab === Tab.SIMILAR_ISSUES}
-                disabled={disabledTabs.includes(Tab.SIMILAR_ISSUES)}
-              >
-                {t('Similar Issues')}
-              </ListLink>
-            )}
-            <Feature features={['session-replay']} organization={organization}>
-              <ListLink
-                to={`${baseUrl}replays/${location.search}`}
-                isActive={() => currentTab === Tab.REPLAYS}
-              >
-                {t('Replays')} <Badge text={replaysCount ?? ''} />
-              </ListLink>
-            </Feature>
-          </NavTabs>
-        </div>
-      </Layout.Header>
-    );
-  }
+          </StatsWrapper>
+        </HeaderRow>
+        {hasIssueActionsV2 ? (
+          // Environment picker for mobile
+          <HeaderRow className="hidden-sm hidden-md hidden-lg">
+            <EnvironmentPageFilter alignDropdown="right" />
+          </HeaderRow>
+        ) : (
+          <HeaderRow>
+            <GroupActions
+              group={group}
+              project={project}
+              disabled={disableActions}
+              event={event}
+              query={location.query}
+            />
+            <StyledSeenByList
+              seenBy={group.seenBy}
+              iconTooltip={t('People who have viewed this issue')}
+            />
+          </HeaderRow>
+        )}
+        {group.issueCategory === IssueCategory.PERFORMANCE
+          ? performanceIssueTabs
+          : errorIssueTabs}
+      </div>
+    </Layout.Header>
+  );
 }
 
-export default withApi(withRouter(withOrganization(GroupHeader)));
+export default GroupHeader;
 
-const TitleWrapper = styled('div')`
+const BreadcrumbActionWrapper = styled('div')`
   display: flex;
-  line-height: 24px;
-`;
-
-const StyledBreadcrumbs = styled(Breadcrumbs)`
-  margin-bottom: ${space(2)};
-`;
-
-const IssueBreadcrumbWrapper = styled('div')`
-  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  gap: ${space(1)};
   align-items: center;
 `;
 
-const StyledIdBadge = styled(IdBadge)`
-  margin-right: ${space(1)};
-`;
-
-const StyledTooltip = styled(Tooltip)`
+const ShortIdBreadrcumb = styled('div')`
   display: flex;
+  gap: ${space(1)};
+  align-items: center;
 `;
 
 const StyledShortId = styled(ShortId)`
@@ -474,46 +461,62 @@ const StyledShortId = styled(ShortId)`
   font-size: ${p => p.theme.fontSizeMedium};
 `;
 
-const StatsWrapper = styled('div')`
-  display: grid;
-  justify-content: flex-end;
-  grid-template-columns: repeat(3, min-content);
-  gap: ${space(3)};
-  margin-right: 15px;
+const HeaderRow = styled('div')`
+  display: flex;
+  gap: ${space(2)};
+  justify-content: space-between;
+  margin-top: ${space(2)};
+
+  @media (max-width: ${p => p.theme.breakpoints.small}) {
+    flex-direction: column;
+  }
 `;
 
-const InboxReasonWrapper = styled('div')`
-  margin-left: ${space(1)};
+const TitleWrapper = styled('div')`
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
+    max-width: 65%;
+  }
+`;
+
+const TitleHeading = styled('div')`
+  display: flex;
+  line-height: 2;
+  gap: ${space(1)};
+`;
+
+const StyledSeenByList = styled(SeenByList)`
+  @media (max-width: ${p => p.theme.breakpoints.small}) {
+    display: none;
+  }
+`;
+
+const StyledEventOrGroupTitle = styled(EventOrGroupTitle)`
+  font-size: inherit;
+`;
+
+const StatsWrapper = styled('div')<{numItems: '2' | '3'}>`
+  display: grid;
+  grid-template-columns: repeat(${p => p.numItems}, min-content);
+  gap: calc(${space(3)} + ${space(3)});
+
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
+    justify-content: flex-end;
+  }
 `;
 
 const StyledTagAndMessageWrapper = styled(TagAndMessageWrapper)`
-  display: grid;
-  grid-auto-flow: column;
+  display: flex;
   gap: ${space(1)};
   justify-content: flex-start;
   line-height: 1.2;
-
-  @media (max-width: ${p => p.theme.breakpoints.small}) {
-    margin-bottom: ${space(2)};
-  }
 `;
 
-const StyledListLink = styled(ListLink)`
-  svg {
-    margin-left: ${space(0.5)};
-    margin-bottom: ${space(0.25)};
-    vertical-align: middle;
-  }
+const IconBadge = styled(Badge)`
+  display: flex;
+  align-items: center;
+  gap: ${space(0.5)};
 `;
 
-const StyledProjectBadge = styled(ProjectBadge)`
-  flex-shrink: 0;
-`;
-
-const BreadcrumbProjectBadge = styled(StyledProjectBadge)`
-  margin-right: ${space(0.75)};
-`;
-
-const EventAnnotationWithSpace = styled(EventAnnotation)`
-  margin-left: ${space(1)};
+const StyledTabList = styled(TabList)`
+  margin-top: ${space(2)};
 `;

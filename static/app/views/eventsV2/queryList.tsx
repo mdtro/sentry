@@ -8,8 +8,8 @@ import {resetPageFilters} from 'sentry/actionCreators/pageFilters';
 import {Client} from 'sentry/api';
 import Feature from 'sentry/components/acl/feature';
 import Button from 'sentry/components/button';
-import DropdownMenuControlV2 from 'sentry/components/dropdownMenuControlV2';
-import {MenuItemProps} from 'sentry/components/dropdownMenuItemV2';
+import DropdownMenuControl from 'sentry/components/dropdownMenuControl';
+import {MenuItemProps} from 'sentry/components/dropdownMenuItem';
 import EmptyStateWarning from 'sentry/components/emptyStateWarning';
 import Pagination from 'sentry/components/pagination';
 import TimeSince from 'sentry/components/timeSince';
@@ -17,13 +17,17 @@ import {IconEllipsis} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
 import {Organization, SavedQuery} from 'sentry/types';
-import {trackAnalyticsEvent} from 'sentry/utils/analytics';
+import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
 import EventView from 'sentry/utils/discover/eventView';
 import parseLinkHeader from 'sentry/utils/parseLinkHeader';
 import {decodeList} from 'sentry/utils/queryString';
 import withApi from 'sentry/utils/withApi';
 
-import {handleCreateQuery, handleDeleteQuery} from './savedQuery/utils';
+import {
+  handleCreateQuery,
+  handleDeleteQuery,
+  handleUpdateHomepageQuery,
+} from './savedQuery/utils';
 import MiniGraph from './miniGraph';
 import QueryCard from './querycard';
 import {getPrebuiltQueries, handleAddQueryToDashboard} from './utils';
@@ -104,14 +108,13 @@ class QueryList extends Component<Props> {
 
   renderDropdownMenu(items: MenuItemProps[]) {
     return (
-      <DropdownMenuControlV2
+      <DropdownMenuControl
         items={items}
-        trigger={({props: triggerProps, ref: triggerRef}) => (
+        trigger={triggerProps => (
           <DropdownTrigger
-            ref={triggerRef}
             {...triggerProps}
             aria-label={t('Query actions')}
-            size="xsmall"
+            size="xs"
             borderless
             onClick={e => {
               e.stopPropagation();
@@ -123,14 +126,14 @@ class QueryList extends Component<Props> {
             data-test-id="menu-trigger"
           />
         )}
-        placement="bottom right"
+        position="bottom-end"
         offset={4}
       />
     );
   }
 
   renderPrebuiltQueries() {
-    const {location, organization, savedQuerySearchQuery, router} = this.props;
+    const {api, location, organization, savedQuerySearchQuery, router} = this.props;
     const views = getPrebuiltQueries(organization);
 
     const hasSearchQuery =
@@ -165,12 +168,30 @@ class QueryList extends Component<Props> {
           onAction: () =>
             handleAddQueryToDashboard({
               eventView,
+              location,
               query: view,
               organization,
               yAxis: view?.yAxis,
               router,
             }),
         },
+
+        ...(organization.features.includes('discover-query-builder-as-landing-page')
+          ? [
+              {
+                key: 'set-as-default',
+                label: t('Set as Default'),
+                onAction: () => {
+                  handleUpdateHomepageQuery(api, organization, eventView.toNewQuery());
+                  trackAdvancedAnalyticsEvent('discover_v2.set_as_default', {
+                    organization,
+                    source: 'context-menu',
+                    type: 'prebuilt-query',
+                  });
+                },
+              },
+            ]
+          : []),
       ];
 
       return (
@@ -190,10 +211,8 @@ class QueryList extends Component<Props> {
             />
           )}
           onEventClick={() => {
-            trackAnalyticsEvent({
-              eventKey: 'discover_v2.prebuilt_query_click',
-              eventName: 'Discoverv2: Click a pre-built query',
-              organization_id: parseInt(this.props.organization.id, 10),
+            trackAdvancedAnalyticsEvent('discover_v2.prebuilt_query_click', {
+              organization,
               query_name: eventView.name,
             });
           }}
@@ -212,7 +231,7 @@ class QueryList extends Component<Props> {
   }
 
   renderSavedQueries() {
-    const {savedQueries, location, organization, router} = this.props;
+    const {api, savedQueries, location, organization, router} = this.props;
 
     if (!savedQueries || !Array.isArray(savedQueries) || savedQueries.length === 0) {
       return [];
@@ -239,11 +258,28 @@ class QueryList extends Component<Props> {
                 onAction: () =>
                   handleAddQueryToDashboard({
                     eventView,
+                    location,
                     query: savedQuery,
                     organization,
                     yAxis: savedQuery?.yAxis ?? eventView.yAxis,
                     router,
                   }),
+              },
+            ]
+          : []),
+        ...(organization.features.includes('discover-query-builder-as-landing-page')
+          ? [
+              {
+                key: 'set-as-default',
+                label: t('Set as Default'),
+                onAction: () => {
+                  handleUpdateHomepageQuery(api, organization, eventView.toNewQuery());
+                  trackAdvancedAnalyticsEvent('discover_v2.set_as_default', {
+                    organization,
+                    source: 'context-menu',
+                    type: 'saved-query',
+                  });
+                },
               },
             ]
           : []),
@@ -271,11 +307,7 @@ class QueryList extends Component<Props> {
           createdBy={eventView.createdBy}
           dateStatus={dateStatus}
           onEventClick={() => {
-            trackAnalyticsEvent({
-              eventKey: 'discover_v2.saved_query_click',
-              eventName: 'Discoverv2: Click a saved query',
-              organization_id: parseInt(this.props.organization.id, 10),
-            });
+            trackAdvancedAnalyticsEvent('discover_v2.saved_query_click', {organization});
           }}
           renderGraph={() => (
             <MiniGraph

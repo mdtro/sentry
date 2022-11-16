@@ -16,6 +16,7 @@ type TestStubFixtures = {
   AsanaCreate: SimpleStub;
   AsanaPlugin: SimpleStub;
   AuditLogs: OverridableStubList;
+  AuditLogsApiEventNames: SimpleStub;
   AuthProvider: OverridableStub;
   AuthProviders: OverridableStubList;
   Authenticators: SimpleStub;
@@ -31,9 +32,11 @@ type TestStubFixtures = {
   DetailedEvents: SimpleStub;
   DiscoverSavedQuery: OverridableStub;
   DocIntegration: OverridableStub;
+  DynamicSamplingConfig: OverridableStub;
   Entries: SimpleStub;
   Environments: OverridableStub;
   Event: OverridableStub;
+  EventAttachment: OverridableStub;
   EventEntry: OverridableStub;
   EventEntryDebugMeta: OverridableStub;
   EventEntryStacktrace: OverridableStub;
@@ -44,9 +47,9 @@ type TestStubFixtures = {
   EventsStats: OverridableStub;
   ExceptionWithMeta: OverridableStubList;
   GitHubIntegration: OverridableStub;
+  GitHubIntegrationConfig: SimpleStub;
   GitHubIntegrationProvider: OverridableStub;
   GitHubRepositoryProvider: OverridableStub;
-  GithubIntegrationConfig: SimpleStub;
   GlobalSelection: OverridableStub;
   Group: OverridableStub;
   GroupStats: OverridableStub;
@@ -75,6 +78,10 @@ type TestStubFixtures = {
   OrganizationEvent: OverridableStub;
   OrganizationIntegrations: OverridableStub;
   Organizations: OverridableStub;
+  Outcomes: SimpleStub;
+  OutcomesWithLowProcessedEvents: SimpleStub;
+  OutcomesWithReason: SimpleStub;
+  OutcomesWithoutClientDiscarded: SimpleStub;
   PhabricatorCreate: SimpleStub;
   PhabricatorPlugin: SimpleStub;
   PlatformExternalIssue: OverridableStub;
@@ -91,7 +98,9 @@ type TestStubFixtures = {
   PublishedApps: SimpleStub;
   PullRequest: OverridableStub;
   Release: (params?: any, healthParams?: any) => any;
+  ReplayReaderParams: OverridableStub;
   Repository: OverridableStub;
+  RepositoryProjectPathConfig: OverridableStub;
   Search: OverridableStub;
   Searches: OverridableStubList;
   SentryApp: OverridableStub;
@@ -117,6 +126,7 @@ type TestStubFixtures = {
   ShortIdQueryResult: OverridableStub;
   SourceMapArchive: OverridableStub;
   SourceMapArtifact: OverridableStub;
+  Span: OverridableStub;
   Subscriptions: OverridableStubList;
   TagValues: OverridableStubList;
   Tags: OverridableStubList;
@@ -126,6 +136,7 @@ type TestStubFixtures = {
   TeamIssuesReviewed: SimpleStub;
   TeamResolutionTime: SimpleStub;
   Tombstones: OverridableStubList;
+  TraceError: OverridableStub;
   UpdateSdkAndEnableIntegrationSuggestion: SimpleStub;
   User: OverridableStub;
   UserDetails: OverridableStub;
@@ -144,7 +155,6 @@ type TestStubFixtures = {
   // Dashboard(widgets = DEFAULT_WIDGETS, props = {})
   // AsanaAutocomplete(type = 'project', values = [DEFAULT_AUTOCOMPLETE])
   // PhabricatorAutocomplete(type = 'project', values = null)
-  // RepositoryProjectPathConfig(project, repo, integration, params)
   // RoleList(params = [], fullAccess = false)
 
   // const MOCK_RESP_VERBOSE

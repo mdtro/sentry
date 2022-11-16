@@ -8,14 +8,36 @@ import {CallTreeNode} from '../callTreeNode';
 
 type FrameIndex = Record<string | number, Frame>;
 
+export function createSentrySampleProfileFrameIndex(
+  frames: Profiling.SentrySampledProfile['profile']['frames']
+): FrameIndex {
+  const frameIndex: FrameIndex = {};
+
+  for (let i = 0; i < frames.length; i++) {
+    const frame = frames[i];
+
+    frameIndex[i] = new Frame({
+      key: i,
+      name: frame.function ?? 'unknown',
+      line: frame.lineno,
+      column: frame.colno,
+    });
+  }
+
+  return frameIndex;
+}
+
 export function createFrameIndex(
+  type: 'mobile' | 'node' | 'web',
   frames: Profiling.Schema['shared']['frames']
 ): FrameIndex;
 export function createFrameIndex(
+  type: 'mobile' | 'node' | 'web',
   frames: JSSelfProfiling.Frame[],
   trace: JSSelfProfiling.Trace
 ): FrameIndex;
 export function createFrameIndex(
+  type: 'mobile' | 'node' | 'web',
   frames: Profiling.Schema['shared']['frames'] | JSSelfProfiling.Frame[],
   trace?: JSSelfProfiling.Trace
 ): FrameIndex {
@@ -37,10 +59,13 @@ export function createFrameIndex(
   }
 
   return (frames as Profiling.Schema['shared']['frames']).reduce((acc, frame, index) => {
-    acc[index] = new Frame({
-      key: index,
-      ...frame,
-    });
+    acc[index] = new Frame(
+      {
+        key: index,
+        ...frame,
+      },
+      type
+    );
     return acc;
   }, {});
 }
@@ -136,7 +161,7 @@ function indexNodeToParents(
       map[node.key] = [];
     }
 
-    map[node.key].push(parent);
+    map[node.key]!.push(parent); // we initialize this above
 
     if (!node.children.length) {
       leafs.push(node);
@@ -144,7 +169,7 @@ function indexNodeToParents(
     }
 
     for (let i = 0; i < node.children.length; i++) {
-      indexNode(node.children[i], node);
+      indexNode(node.children[i]!, node); // iterating over non empty array
     }
   }
 
@@ -180,11 +205,12 @@ function reverseTrail(
       children: [] as FlamegraphFrame[],
     };
 
-    if (!parentMap[n.key]) {
+    const parents = parentMap[n.key];
+    if (!parents) {
       continue;
     }
 
-    for (const parent of parentMap[n.key]) {
+    for (const parent of parents) {
       nc.children.push(...reverseTrail([parent], parentMap));
     }
     splits.push(nc);

@@ -1,4 +1,5 @@
 import {Fragment} from 'react';
+import styled from '@emotion/styled';
 import moment from 'moment';
 
 import CommitLink from 'sentry/components/commitLink';
@@ -78,29 +79,52 @@ function GroupActivityItem({activity, orgSlug, projectId, author}: Props) {
 
   function getAssignedMessage(data: GroupActivityAssigned['data']) {
     let assignee: string | User | undefined = undefined;
-
     if (data.assigneeType === 'team') {
       const team = TeamStore.getById(data.assignee);
-      assignee = team ? team.slug : '<unknown-team>';
-
-      return tct('[author] assigned this issue to #[assignee]', {
-        author,
-        assignee,
-      });
+      assignee = team ? `#${team.slug}` : '<unknown-team>';
+    } else if (activity.user && data.assignee === activity.user.id) {
+      assignee = t('themselves');
+    } else if (data.assigneeType === 'user' && data.assigneeEmail) {
+      assignee = data.assigneeEmail;
+    } else {
+      assignee = t('an unknown user');
     }
 
-    if (activity.user && data.assignee === activity.user.id) {
-      return tct('[author] assigned this issue to themselves', {author});
-    }
+    const isAutoAssigned = ['projectOwnership', 'codeowners'].includes(
+      data.integration as string
+    );
 
-    if (data.assigneeType === 'user' && data.assigneeEmail) {
-      return tct('[author] assigned this issue to [assignee]', {
-        author,
-        assignee: data.assigneeEmail,
-      });
-    }
+    const integrationName: Record<
+      NonNullable<GroupActivityAssigned['data']['integration']>,
+      string
+    > = {
+      msteams: t('Microsoft Teams'),
+      slack: t('Slack'),
+      projectOwnership: t('Ownership Rule'),
+      codeowners: t('Codeowners Rule'),
+    };
 
-    return tct('[author] assigned this issue to an unknown user', {author});
+    return (
+      <Fragment>
+        <div>
+          {tct('[author] [action] this issue to [assignee]', {
+            action: isAutoAssigned ? t('auto-assigned') : t('assigned'),
+            author,
+            assignee,
+          })}
+        </div>
+        {data.integration && (
+          <CodeWrapper>
+            {t('Assigned via %s', integrationName[data.integration])}
+            {data.rule && (
+              <Fragment>
+                : <StyledRuleSpan>{data.rule}</StyledRuleSpan>
+              </Fragment>
+            )}
+          </CodeWrapper>
+        )}
+      </Fragment>
+    );
   }
 
   function renderContent() {
@@ -148,8 +172,7 @@ function GroupActivityItem({activity, orgSlug, projectId, author}: Props) {
           );
         if (deployedReleases.length === 1) {
           return tct(
-            '[author] marked this issue as resolved in [version] [break]' +
-              'This commit was released in [release]',
+            '[author] marked this issue as resolved in [version] [break]This commit was released in [release]',
             {
               author,
               version: (
@@ -172,12 +195,10 @@ function GroupActivityItem({activity, orgSlug, projectId, author}: Props) {
         }
         if (deployedReleases.length > 1) {
           return tct(
-            '[author] marked this issue as resolved in [version] [break]' +
-              'This commit was released in [release] and ' +
-              (deployedReleases.length - 1) +
-              ' others',
+            '[author] marked this issue as resolved in [version] [break]This commit was released in [release] and [otherCount] others',
             {
               author,
+              otherCount: deployedReleases.length - 1,
               version: (
                 <CommitLink
                   inline
@@ -209,7 +230,7 @@ function GroupActivityItem({activity, orgSlug, projectId, author}: Props) {
       case GroupActivityType.SET_RESOLVED_IN_PULL_REQUEST: {
         const {data} = activity;
         const {pullRequest} = data;
-        return tct('[author] marked this issue as resolved in [version]', {
+        return tct('[author] has created a PR for this issue: [version]', {
           author,
           version: (
             <PullRequestLink
@@ -258,7 +279,11 @@ function GroupActivityItem({activity, orgSlug, projectId, author}: Props) {
           fingerprints.length,
           author,
           destination ? (
-            <Link to={`${issuesLink}${destination.id}`}>{destination.shortId}</Link>
+            <Link
+              to={`${issuesLink}${destination.id}?referrer=group-activity-unmerged-source`}
+            >
+              {destination.shortId}
+            </Link>
           ) : (
             t('a group')
           )
@@ -273,7 +298,11 @@ function GroupActivityItem({activity, orgSlug, projectId, author}: Props) {
           fingerprints.length,
           author,
           source ? (
-            <Link to={`${issuesLink}${source.id}`}>{source.shortId}</Link>
+            <Link
+              to={`${issuesLink}${source.id}?referrer=group-activity-unmerged-destination`}
+            >
+              {source.shortId}
+            </Link>
           ) : (
             t('a group')
           )
@@ -302,7 +331,7 @@ function GroupActivityItem({activity, orgSlug, projectId, author}: Props) {
           author,
           ['new-events']: (
             <Link
-              to={`/organizations/${orgSlug}/issues/?query=reprocessing.original_issue_id:${oldGroupId}`}
+              to={`/organizations/${orgSlug}/issues/?query=reprocessing.original_issue_id:${oldGroupId}&referrer=group-activity-reprocesses`}
             >
               {tn('See %s new event', 'See %s new events', eventCount)}
             </Link>
@@ -323,3 +352,12 @@ function GroupActivityItem({activity, orgSlug, projectId, author}: Props) {
 }
 
 export default GroupActivityItem;
+
+const CodeWrapper = styled('div')`
+  overflow-wrap: anywhere;
+  font-size: ${p => p.theme.fontSizeSmall};
+`;
+
+const StyledRuleSpan = styled('span')`
+  font-family: ${p => p.theme.text.familyMono};
+`;

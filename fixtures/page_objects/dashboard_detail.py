@@ -3,7 +3,8 @@ from .base import BasePage
 EDIT_WIDGET_BUTTON = '[data-test-id="widget-edit"]'
 WIDGET_DRAG_HANDLE = ".widget-drag"
 WIDGET_RESIZE_HANDLE = ".widget-resize"
-WIDGET_TITLE_FIELD = 'input[data-test-id="widget-title-input"]'
+WIDGET_EDITABLE_TEXT_LABEL = '[data-test-id="editable-text-label"]'
+WIDGET_TITLE_FIELD = 'input[aria-label="Widget title"]'
 
 
 class DashboardDetailPage(BasePage):
@@ -34,39 +35,41 @@ class DashboardDetailPage(BasePage):
         self.wait_until_loaded()
 
     def enter_edit_state(self):
-        self.browser.wait_until_clickable('[data-test-id="dashboard-edit"]')
         button = self.browser.element('[data-test-id="dashboard-edit"]')
+        self.browser.wait_until_clickable('[data-test-id="dashboard-edit"]')
         button.click()
         self.wait_until_loaded()
 
     def click_dashboard_add_widget_button(self):
-        self.browser.wait_until_clickable('[data-test-id="widget-add"]')
         button = self.browser.element('[data-test-id="widget-add"]')
-        button.click()
+        # HACK: Use JavaScript to execute click to avoid click intercepted issues
+        self.browser.driver.execute_script("arguments[0].click()", button)
         self.wait_until_loaded()
 
     def click_dashboard_header_add_widget_button(self):
-        self.browser.wait_until_clickable('[data-test-id="add-widget-library"]')
         button = self.browser.element('[data-test-id="add-widget-library"]')
+        self.browser.wait_until_clickable('[data-test-id="add-widget-library"]')
         button.click()
         self.wait_until_loaded()
 
     def click_cancel_button(self):
-        self.browser.wait_until_clickable('[data-test-id="dashboard-cancel"]')
         button = self.browser.element('[data-test-id="dashboard-cancel"]')
+        self.browser.wait_until_clickable('[data-test-id="dashboard-cancel"]')
         button.click()
         self.wait_until_loaded()
 
     def add_widget_through_dashboard(self, widget_title):
         self.click_dashboard_add_widget_button()
+        self.browser.element(WIDGET_EDITABLE_TEXT_LABEL).click()
         title_input = self.browser.element(WIDGET_TITLE_FIELD)
+        title_input.clear()
         title_input.send_keys(widget_title)
-        button = self.browser.element('[data-test-id="add-widget"]')
+        button = self.browser.element('[aria-label="Add Widget"]')
         button.click()
         self.wait_until_loaded()
 
     def save_dashboard(self):
-        self.browser.wait_until_clickable('[data-test-id="dashboard-commit"]')
         button = self.browser.element('[data-test-id="dashboard-commit"]')
+        self.browser.wait_until_clickable('[data-test-id="dashboard-commit"]')
         button.click()
         self.wait_until_loaded()

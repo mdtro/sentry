@@ -114,7 +114,10 @@ class ReleaseCard extends Component<Props> {
                 query: {project: getReleaseProjectId(release, selection)},
               }}
             >
-              <GuideAnchor disabled={!isTopRelease} target="release_version">
+              <GuideAnchor
+                disabled={!isTopRelease || projectsToShow.length > 1}
+                target="release_version"
+              >
                 <VersionWrapper>
                   <StyledVersion version={version} tooltipRawVersion anchor={false} />
                 </VersionWrapper>
@@ -154,14 +157,14 @@ class ReleaseCard extends Component<Props> {
             <Collapsible
               expandButton={({onExpand, numberOfHiddenItems}) => (
                 <ExpandButtonWrapper>
-                  <Button priority="primary" size="xsmall" onClick={onExpand}>
+                  <Button priority="primary" size="xs" onClick={onExpand}>
                     {tct('Show [numberOfHiddenItems] More', {numberOfHiddenItems})}
                   </Button>
                 </ExpandButtonWrapper>
               )}
               collapseButton={({onCollapse}) => (
                 <CollapseButtonWrapper>
-                  <Button priority="primary" size="xsmall" onClick={onCollapse}>
+                  <Button priority="primary" size="xs" onClick={onCollapse}>
                     {t('Collapse')}
                   </Button>
                 </CollapseButtonWrapper>

@@ -81,7 +81,7 @@ function Clipboard({
 
   // XXX: Instead of assigning the `onClick` to the cloned child element, we
   // attach a event listener, otherwise we would wipeout whatever click handler
-  // may be assigne don the child.
+  // may be assigned on the child.
   const handleMount = useCallback((ref: HTMLElement) => {
     // eslint-disable-next-line react/no-find-dom-node
     setElement(findDOMNode(ref));
@@ -96,7 +96,7 @@ function Clipboard({
     return null;
   }
 
-  return cloneElement(children, {ref: handleMount});
+  return cloneElement<any>(children, {ref: handleMount});
 }
 
 export default Clipboard;

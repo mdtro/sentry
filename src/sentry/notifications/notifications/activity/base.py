@@ -14,6 +14,7 @@ from sentry.notifications.types import NotificationSettingTypes
 from sentry.notifications.utils import send_activity_notification
 from sentry.notifications.utils.avatar import avatar_as_html
 from sentry.notifications.utils.participants import get_participants_for_group
+from sentry.services.hybrid_cloud.user import APIUser, user_service
 from sentry.types.integrations import ExternalProviders
 
 if TYPE_CHECKING:
@@ -63,7 +64,7 @@ class ActivityNotification(ProjectNotification, abc.ABC):
     @abc.abstractmethod
     def get_participants_with_group_subscription_reason(
         self,
-    ) -> Mapping[ExternalProviders, Mapping[Team | User, int]]:
+    ) -> Mapping[ExternalProviders, Mapping[Team | APIUser, int]]:
         pass
 
     def send(self) -> None:
@@ -91,9 +92,10 @@ class GroupActivityNotification(ActivityNotification, abc.ABC):
 
     def get_participants_with_group_subscription_reason(
         self,
-    ) -> Mapping[ExternalProviders, Mapping[Team | User, int]]:
+    ) -> Mapping[ExternalProviders, Mapping[Team | APIUser, int]]:
         """This is overridden by the activity subclasses."""
-        return get_participants_for_group(self.group, self.activity.user)
+        user = user_service.get_user(self.activity.user_id)
+        return get_participants_for_group(self.group, user)
 
     def get_unsubscribe_key(self) -> tuple[str, int, str | None] | None:
         return "issue", self.group.id, None
@@ -131,15 +133,21 @@ class GroupActivityNotification(ActivityNotification, abc.ABC):
             "referrer": self.__class__.__name__,
         }
 
-    def get_notification_title(self, context: Mapping[str, Any] | None = None) -> str:
+    def get_notification_title(
+        self, provider: ExternalProviders, context: Mapping[str, Any] | None = None
+    ) -> str:
         description, params, _ = self.get_description()
-        return self.description_as_text(description, params, True)
+        return self.description_as_text(description, params, True, provider)
 
     def get_subject(self, context: Mapping[str, Any] | None = None) -> str:
         return f"{self.group.qualified_short_id} - {self.group.title}"
 
     def description_as_text(
-        self, description: str, params: Mapping[str, Any], url: bool | None = False
+        self,
+        description: str,
+        params: Mapping[str, Any],
+        url: bool | None = False,
+        provider: ExternalProviders | None = None,
     ) -> str:
         user = self.activity.user
         if user:
@@ -150,7 +158,7 @@ class GroupActivityNotification(ActivityNotification, abc.ABC):
         issue_name = self.group.qualified_short_id or "an issue"
         if url and self.group.qualified_short_id:
             group_url = self.group.get_absolute_url(params={"referrer": "activity_notification"})
-            issue_name = f"<{group_url}|{self.group.qualified_short_id}>"
+            issue_name = f"{self.format_url(text=self.group.qualified_short_id, url=group_url, provider=provider)}"
 
         context = {"author": name, "an issue": issue_name}
         context.update(params)
@@ -176,13 +184,13 @@ class GroupActivityNotification(ActivityNotification, abc.ABC):
 
         return mark_safe(description.format(**context))
 
-    def get_title_link(self, recipient: Team | User) -> str | None:
-        from sentry.integrations.slack.message_builder.issues import get_title_link
+    def get_title_link(self, recipient: Team | User, provider: ExternalProviders) -> str | None:
+        from sentry.integrations.message_builder import get_title_link
 
-        return get_title_link(self.group, None, False, True, self)
+        return get_title_link(self.group, None, False, True, self, provider)
 
     def build_attachment_title(self, recipient: Team | User) -> str:
-        from sentry.integrations.slack.message_builder.issues import build_attachment_title
+        from sentry.integrations.message_builder import build_attachment_title
 
         return build_attachment_title(self.group)
 

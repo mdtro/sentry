@@ -2,19 +2,18 @@ import {createContext, useMemo} from 'react';
 
 import ConfigStore from 'sentry/stores/configStore';
 import {useLegacyStore} from 'sentry/stores/useLegacyStore';
-
 import {
+  makeColorMapByFrequency,
   makeColorMapByImage,
   makeColorMapByRecursion,
   makeColorMapBySystemVsApplication,
-} from '../colors/utils';
-
+} from 'sentry/utils/profiling/colors/utils';
 import {
   DarkFlamegraphTheme,
   FlamegraphTheme,
   LightFlamegraphTheme,
-} from './flamegraphTheme';
-import {useFlamegraphPreferencesValue} from './useFlamegraphPreferences';
+} from 'sentry/utils/profiling/flamegraph/flamegraphTheme';
+import {useFlamegraphPreferences} from 'sentry/utils/profiling/flamegraph/hooks/useFlamegraphPreferences';
 
 export const FlamegraphThemeContext = createContext<FlamegraphTheme | null>(null);
 
@@ -26,7 +25,7 @@ function FlamegraphThemeProvider(
   props: FlamegraphThemeProviderProps
 ): React.ReactElement {
   const {theme} = useLegacyStore(ConfigStore);
-  const flamegraphPreferences = useFlamegraphPreferencesValue();
+  const flamegraphPreferences = useFlamegraphPreferences();
 
   const activeFlamegraphTheme = useMemo((): FlamegraphTheme => {
     const base = theme === 'light' ? LightFlamegraphTheme : DarkFlamegraphTheme;
@@ -45,6 +44,12 @@ function FlamegraphThemeProvider(
         return {
           ...base,
           COLORS: {...base.COLORS, COLOR_MAP: makeColorMapBySystemVsApplication},
+        };
+      }
+      case 'by frequency': {
+        return {
+          ...base,
+          COLORS: {...base.COLORS, COLOR_MAP: makeColorMapByFrequency},
         };
       }
       default: {

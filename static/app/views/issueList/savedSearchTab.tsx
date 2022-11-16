@@ -4,10 +4,10 @@ import styled from '@emotion/styled';
 import Access from 'sentry/components/acl/access';
 import Badge from 'sentry/components/badge';
 import Button from 'sentry/components/button';
+import CompactSelect from 'sentry/components/compactSelect';
 import Confirm from 'sentry/components/confirm';
-import DropdownButtonV2 from 'sentry/components/dropdownButtonV2';
-import CompactSelect from 'sentry/components/forms/compactSelect';
-import {ControlProps} from 'sentry/components/forms/selectControl';
+import DropdownButton from 'sentry/components/dropdownButton';
+import {ControlProps} from 'sentry/components/forms/controls/selectControl';
 import QueryCount from 'sentry/components/queryCount';
 import {IconDelete} from 'sentry/icons';
 import {t} from 'sentry/locale';
@@ -119,11 +119,10 @@ function SavedSearchTab({
     }
 
     return searchOptions;
-  }, []);
+  }, [onSavedSearchDelete, organization, savedSearchList]);
 
-  const trigger = ({props, ref}) => (
+  const trigger = props => (
     <StyledDropdownTrigger
-      ref={ref}
       {...props}
       isActive={isActive}
       borderless
@@ -182,7 +181,7 @@ const StyledCompactSelect = styled(CompactSelect)<{isActive?: boolean}>`
   border-bottom-color: ${p => (p.isActive ? p.theme.active : 'transparent')};
 `;
 
-const StyledDropdownTrigger = styled(DropdownButtonV2)<{isActive?: boolean}>`
+const StyledDropdownTrigger = styled(DropdownButton)<{isActive?: boolean}>`
   display: flex;
   height: calc(1.25rem - 2px);
   align-items: center;

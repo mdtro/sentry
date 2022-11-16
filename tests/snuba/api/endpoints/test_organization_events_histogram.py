@@ -9,14 +9,18 @@ from rest_framework.exceptions import ErrorDetail
 
 from sentry.testutils import APITestCase, MetricsEnhancedPerformanceTestCase, SnubaTestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
 from sentry.utils.samples import load_data
 from sentry.utils.snuba import get_array_column_alias
+
+pytestmark = pytest.mark.sentry_metrics
 
 HistogramSpec = namedtuple("HistogramSpec", ["start", "end", "fields"])
 
 ARRAY_COLUMNS = ["measurements", "span_op_breakdowns"]
 
 
+@region_silo_test
 class OrganizationEventsHistogramEndpointTest(APITestCase, SnubaTestCase):
     def setUp(self):
         super().setUp()
@@ -1019,6 +1023,7 @@ class OrganizationEventsHistogramEndpointTest(APITestCase, SnubaTestCase):
         assert response.data == self.as_response_data(expected)
 
 
+@region_silo_test
 class OrganizationEventsMetricsEnhancedPerformanceHistogramEndpointTest(
     MetricsEnhancedPerformanceTestCase
 ):
@@ -1033,7 +1038,7 @@ class OrganizationEventsMetricsEnhancedPerformanceHistogramEndpointTest(
             spec = HistogramSpec(*spec)
             for suffix_key, count in spec.fields:
                 for i in range(count):
-                    self.store_metric(
+                    self.store_transaction_metric(
                         (spec.end + spec.start) / 2,
                         metric=suffix_key,
                         tags={"transaction": suffix_key},
@@ -1151,3 +1156,12 @@ class OrganizationEventsMetricsEnhancedPerformanceHistogramEndpointTest(
         expected_response = self.as_response_data(expected)
         expected_response["meta"] = {"isMetricsData": True}
         assert response.data == expected_response
+
+
+@region_silo_test
+class OrganizationEventsMetricsEnhancedPerformanceHistogramEndpointTestWithMetricLayer(
+    OrganizationEventsMetricsEnhancedPerformanceHistogramEndpointTest
+):
+    def setUp(self):
+        super().setUp()
+        self.features["organizations:use-metrics-layer"] = True

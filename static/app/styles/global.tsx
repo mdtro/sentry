@@ -196,10 +196,6 @@ const styles = (theme: Theme, isDark: boolean) => css`
         .nav-header span.help-link a {
           color: ${theme.subText};
         }
-        .search .search-input {
-          background: ${theme.background};
-          color: ${theme.formText};
-        }
 
         /* Global Selection header date picker */
         .rdrCalendarWrapper {
@@ -229,17 +225,6 @@ const styles = (theme: Theme, isDark: boolean) => css`
           &.inverted:after {
             border-top-color: ${theme.background};
           }
-        }
-        .context-summary .context-item.darwin .context-item-icon,
-        .context-summary .context-item.ios .context-item-icon,
-        .context-summary .context-item.macos .context-item-icon,
-        .context-summary .context-item.tvos .context-item-icon,
-        .context-summary .context-item.mac-os-x .context-item-icon,
-        .context-summary .context-item.mac .context-item-icon,
-        .context-summary .context-item.apple .context-item-icon,
-        .context-summary .context-item.watchos .context-item-icon {
-          filter: invert(100%);
-          opacity: 0.8;
         }
       `
     : ''}

@@ -34,7 +34,6 @@ from sentry.api.endpoints.codeowners import (
     ExternalUserEndpoint,
     ProjectCodeOwnersDetailsEndpoint,
     ProjectCodeOwnersEndpoint,
-    ProjectCodeOwnersRequestEndpoint,
 )
 from sentry.api.endpoints.data_scrubbing_selector_suggestions import (
     DataScrubbingSelectorSuggestionsEndpoint,
@@ -170,10 +169,7 @@ from sentry.api.endpoints.organization_details import OrganizationDetailsEndpoin
 from sentry.api.endpoints.organization_environments import OrganizationEnvironmentsEndpoint
 from sentry.api.endpoints.organization_event_details import OrganizationEventDetailsEndpoint
 from sentry.api.endpoints.organization_eventid import EventIdLookupEndpoint
-from sentry.api.endpoints.organization_events import (
-    OrganizationEventsGeoEndpoint,
-    OrganizationEventsV2Endpoint,
-)
+from sentry.api.endpoints.organization_events import OrganizationEventsGeoEndpoint
 from sentry.api.endpoints.organization_events_facets import OrganizationEventsFacetsEndpoint
 from sentry.api.endpoints.organization_events_facets_performance import (
     OrganizationEventsFacetsPerformanceEndpoint,
@@ -206,7 +202,6 @@ from sentry.api.endpoints.organization_events_trends import (
 from sentry.api.endpoints.organization_events_vitals import OrganizationEventsVitalsEndpoint
 from sentry.api.endpoints.organization_group_index import OrganizationGroupIndexEndpoint
 from sentry.api.endpoints.organization_group_index_stats import OrganizationGroupIndexStatsEndpoint
-from sentry.api.endpoints.organization_has_mobile_app_events import OrganizationHasMobileAppEvents
 from sentry.api.endpoints.organization_index import OrganizationIndexEndpoint
 from sentry.api.endpoints.organization_integration_repos import OrganizationIntegrationReposEndpoint
 from sentry.api.endpoints.organization_integration_serverless_functions import (
@@ -223,16 +218,7 @@ from sentry.api.endpoints.organization_member import (
     OrganizationMemberDetailsEndpoint,
     OrganizationMemberIndexEndpoint,
 )
-from sentry.api.endpoints.organization_member_issues_assigned import (
-    OrganizationMemberIssuesAssignedEndpoint,
-)
-from sentry.api.endpoints.organization_member_issues_bookmarked import (
-    OrganizationMemberIssuesBookmarkedEndpoint,
-)
-from sentry.api.endpoints.organization_member_issues_viewed import (
-    OrganizationMemberIssuesViewedEndpoint,
-)
-from sentry.api.endpoints.organization_member_team_details import (
+from sentry.api.endpoints.organization_member.team_details import (
     OrganizationMemberTeamDetailsEndpoint,
 )
 from sentry.api.endpoints.organization_member_unreleased_commits import (
@@ -251,7 +237,6 @@ from sentry.api.endpoints.organization_pinned_searches import OrganizationPinned
 from sentry.api.endpoints.organization_processingissues import OrganizationProcessingIssuesEndpoint
 from sentry.api.endpoints.organization_profiling_profiles import (
     OrganizationProfilingFiltersEndpoint,
-    OrganizationProfilingProfilesEndpoint,
 )
 from sentry.api.endpoints.organization_projects import (
     OrganizationProjectsCountEndpoint,
@@ -302,7 +287,6 @@ from sentry.api.endpoints.organization_transaction_anomaly_detection import (
     OrganizationTransactionAnomalyDetectionEndpoint,
 )
 from sentry.api.endpoints.organization_user_details import OrganizationUserDetailsEndpoint
-from sentry.api.endpoints.organization_user_issues import OrganizationUserIssuesEndpoint
 from sentry.api.endpoints.organization_user_issues_search import (
     OrganizationUserIssuesSearchEndpoint,
 )
@@ -353,7 +337,10 @@ from sentry.api.endpoints.project_processingissues import (
     ProjectProcessingIssuesEndpoint,
     ProjectProcessingIssuesFixEndpoint,
 )
-from sentry.api.endpoints.project_profiling_profile import ProjectProfilingProfileEndpoint
+from sentry.api.endpoints.project_profiling_profile import (
+    ProjectProfilingProfileEndpoint,
+    ProjectProfilingRawProfileEndpoint,
+)
 from sentry.api.endpoints.project_release_commits import ProjectReleaseCommitsEndpoint
 from sentry.api.endpoints.project_release_details import ProjectReleaseDetailsEndpoint
 from sentry.api.endpoints.project_release_file_details import ProjectReleaseFileDetailsEndpoint
@@ -369,8 +356,6 @@ from sentry.api.endpoints.project_rule_details import ProjectRuleDetailsEndpoint
 from sentry.api.endpoints.project_rule_task_details import ProjectRuleTaskDetailsEndpoint
 from sentry.api.endpoints.project_rules import ProjectRulesEndpoint
 from sentry.api.endpoints.project_rules_configuration import ProjectRulesConfigurationEndpoint
-from sentry.api.endpoints.project_search_details import ProjectSearchDetailsEndpoint
-from sentry.api.endpoints.project_searches import ProjectSearchesEndpoint
 from sentry.api.endpoints.project_servicehook_details import ProjectServiceHookDetailsEndpoint
 from sentry.api.endpoints.project_servicehook_stats import ProjectServiceHookStatsEndpoint
 from sentry.api.endpoints.project_servicehooks import ProjectServiceHooksEndpoint
@@ -462,7 +447,6 @@ from sentry.discover.endpoints.discover_key_transactions import (
     KeyTransactionEndpoint,
     KeyTransactionListEndpoint,
 )
-from sentry.discover.endpoints.discover_query import DiscoverQueryEndpoint
 from sentry.discover.endpoints.discover_saved_queries import DiscoverSavedQueriesEndpoint
 from sentry.discover.endpoints.discover_saved_query_detail import (
     DiscoverSavedQueryDetailEndpoint,
@@ -526,7 +510,6 @@ from sentry.integrations.slack.webhooks import (
     SlackCommandsEndpoint,
     SlackEventEndpoint,
 )
-from sentry.integrations.vercel.generic_webhook import VercelGenericWebhookEndpoint
 from sentry.integrations.vercel.webhook import VercelWebhookEndpoint
 from sentry.integrations.vsts.search import VstsSearchEndpoint
 from sentry.integrations.vsts.webhooks import WorkItemWebhook
@@ -612,8 +595,8 @@ __EXCLUDED_FROM_PUBLIC_ENDPOINTS = {
     SentryAppInteractionEndpoint,
     OrganizationProfilingFiltersEndpoint,
     OrganizationTransactionAnomalyDetectionEndpoint,
-    OrganizationProfilingProfilesEndpoint,
     ProjectProfilingProfileEndpoint,
+    ProjectProfilingRawProfileEndpoint,
     JiraDescriptorEndpoint,
     JiraInstalledEndpoint,
     JiraUninstalledEndpoint,
@@ -682,7 +665,6 @@ __EXCLUDED_FROM_PUBLIC_ENDPOINTS = {
     OrganizationCodeMappingsEndpoint,
     OrganizationCodeMappingDetailsEndpoint,
     OrganizationCodeMappingCodeOwnersEndpoint,
-    DiscoverQueryEndpoint,
     DiscoverSavedQueriesEndpoint,
     DiscoverSavedQueryDetailEndpoint,
     DiscoverSavedQueryVisitEndpoint,
@@ -718,8 +700,6 @@ __EXCLUDED_FROM_PUBLIC_ENDPOINTS = {
     OrganizationConfigIntegrationsEndpoint,
     OrganizationConfigRepositoriesEndpoint,
     OrganizationSdkUpdatesEndpoint,
-    OrganizationHasMobileAppEvents,
-    OrganizationEventsV2Endpoint,
     OrganizationEventDetailsEndpoint,
     OrganizationEventsStatsEndpoint,
     OrganizationEventsGeoEndpoint,
@@ -776,13 +756,9 @@ __EXCLUDED_FROM_PUBLIC_ENDPOINTS = {
     OrganizationSearchDetailsEndpoint,
     OrganizationSearchesEndpoint,
     OrganizationUserIssuesSearchEndpoint,
-    OrganizationUserIssuesEndpoint,
     OrganizationIssuesResolvedInReleaseEndpoint,
     OrganizationMemberDetailsEndpoint,
     OrganizationMemberUnreleasedCommitsEndpoint,
-    OrganizationMemberIssuesAssignedEndpoint,
-    OrganizationMemberIssuesBookmarkedEndpoint,
-    OrganizationMemberIssuesViewedEndpoint,
     OrganizationProcessingIssuesEndpoint,
     OrganizationProjectsCountEndpoint,
     OrganizationProjectsSentFirstEventEndpoint,
@@ -860,8 +836,6 @@ __EXCLUDED_FROM_PUBLIC_ENDPOINTS = {
     ProjectRulesConfigurationEndpoint,
     ProjectRuleDetailsEndpoint,
     ProjectRuleTaskDetailsEndpoint,
-    ProjectSearchesEndpoint,
-    ProjectSearchDetailsEndpoint,
     ProjectTagsEndpoint,
     ProjectTagKeyDetailsEndpoint,
     ProjectTeamsEndpoint,
@@ -875,7 +849,6 @@ __EXCLUDED_FROM_PUBLIC_ENDPOINTS = {
     ProjectOwnershipEndpoint,
     ProjectCodeOwnersEndpoint,
     ProjectCodeOwnersDetailsEndpoint,
-    ProjectCodeOwnersRequestEndpoint,
     ProjectTransactionThresholdEndpoint,
     ProjectPluginsEndpoint,
     ProjectPluginDetailsEndpoint,
@@ -923,7 +896,6 @@ __EXCLUDED_FROM_PUBLIC_ENDPOINTS = {
     BitbucketUninstalledEndpoint,
     BitbucketSearchEndpoint,
     VercelWebhookEndpoint,
-    VercelGenericWebhookEndpoint,
     MsTeamsWebhookEndpoint,
     OrganizationCodeOwnersAssociationsEndpoint,
     PluginGroupEndpoint,

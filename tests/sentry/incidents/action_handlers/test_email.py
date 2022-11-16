@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 import responses
+from django.conf import settings
 from django.core import mail
 from django.urls import reverse
 from django.utils import timezone
@@ -11,6 +12,7 @@ from sentry.incidents.action_handlers import (
     EmailActionHandler,
     generate_incident_trigger_email_context,
 )
+from sentry.incidents.charts import fetch_metric_alert_events_timeseries
 from sentry.incidents.logic import CRITICAL_TRIGGER_LABEL, WARNING_TRIGGER_LABEL
 from sentry.incidents.models import (
     INCIDENT_STATUS,
@@ -21,6 +23,8 @@ from sentry.incidents.models import (
 )
 from sentry.models import NotificationSetting, UserEmail, UserOption
 from sentry.notifications.types import NotificationSettingOptionValues, NotificationSettingTypes
+from sentry.snuba.dataset import Dataset
+from sentry.snuba.models import SnubaQuery
 from sentry.testutils import TestCase
 from sentry.types.integrations import ExternalProviders
 from sentry.utils.http import absolute_uri
@@ -180,6 +184,7 @@ class EmailActionHandlerGenerateEmailContextTest(TestCase):
                         "incident_id": incident.identifier,
                     },
                 )
+                + "?referrer=alert_email"
             ),
             "rule_link": absolute_uri(
                 reverse(
@@ -206,6 +211,7 @@ class EmailActionHandlerGenerateEmailContextTest(TestCase):
             "project_slug": self.project.slug,
             "unsubscribe_link": None,
             "chart_url": None,
+            "timezone": settings.SENTRY_DEFAULT_TIME_ZONE,
         }
         assert expected == generate_incident_trigger_email_context(
             self.project,
@@ -308,8 +314,12 @@ class EmailActionHandlerGenerateEmailContextTest(TestCase):
             self.project, incident, action.alert_rule_trigger, status, IncidentStatus.CRITICAL
         ).get("environment")
 
+    @patch(
+        "sentry.incidents.charts.fetch_metric_alert_events_timeseries",
+        side_effect=fetch_metric_alert_events_timeseries,
+    )
     @patch("sentry.incidents.charts.generate_chart", return_value="chart-url")
-    def test_metric_chart(self, mock_generate_chart):
+    def test_metric_chart(self, mock_generate_chart, mock_fetch_metric_alert_events_timeseries):
         trigger_status = TriggerStatus.ACTIVE
         incident = self.create_incident()
         action = self.create_alert_rule_trigger_action(triggered_for_incident=incident)
@@ -333,6 +343,76 @@ class EmailActionHandlerGenerateEmailContextTest(TestCase):
         chart_data = mock_generate_chart.call_args[0][1]
         assert chart_data["rule"]["id"] == str(incident.alert_rule.id)
         assert chart_data["selectedIncident"]["identifier"] == str(incident.identifier)
+        assert mock_fetch_metric_alert_events_timeseries.call_args[0][2]["dataset"] == "discover"
         series_data = chart_data["timeseriesData"][0]["data"]
         assert len(series_data) > 0
         assert mock_generate_chart.call_args[1]["size"] == {"width": 600, "height": 200}
+
+    @patch(
+        "sentry.incidents.charts.fetch_metric_alert_events_timeseries",
+        side_effect=fetch_metric_alert_events_timeseries,
+    )
+    @patch("sentry.incidents.charts.generate_chart", return_value="chart-url")
+    def test_metric_chart_mep(self, mock_generate_chart, mock_fetch_metric_alert_events_timeseries):
+        trigger_status = TriggerStatus.ACTIVE
+        alert_rule = self.create_alert_rule(
+            query_type=SnubaQuery.Type.PERFORMANCE, dataset=Dataset.PerformanceMetrics
+        )
+        incident = self.create_incident(alert_rule=alert_rule)
+        action = self.create_alert_rule_trigger_action(triggered_for_incident=incident)
+
+        with self.feature(
+            [
+                "organizations:incidents",
+                "organizations:discover",
+                "organizations:discover-basic",
+                "organizations:metric-alert-chartcuterie",
+            ]
+        ):
+            result = generate_incident_trigger_email_context(
+                self.project,
+                incident,
+                action.alert_rule_trigger,
+                trigger_status,
+                IncidentStatus(incident.status),
+            )
+        assert result["chart_url"] == "chart-url"
+        chart_data = mock_generate_chart.call_args[0][1]
+        assert chart_data["rule"]["id"] == str(incident.alert_rule.id)
+        assert chart_data["selectedIncident"]["identifier"] == str(incident.identifier)
+        assert mock_fetch_metric_alert_events_timeseries.call_args[0][2]["dataset"] == "metrics"
+        series_data = chart_data["timeseriesData"][0]["data"]
+        assert len(series_data) > 0
+        assert mock_generate_chart.call_args[1]["size"] == {"width": 600, "height": 200}
+
+    def test_timezones(self):
+        trigger_status = TriggerStatus.ACTIVE
+        alert_rule = self.create_alert_rule(
+            query_type=SnubaQuery.Type.PERFORMANCE, dataset=Dataset.PerformanceMetrics
+        )
+        incident = self.create_incident(alert_rule=alert_rule)
+        action = self.create_alert_rule_trigger_action(triggered_for_incident=incident)
+
+        est = "America/New_York"
+        pst = "US/Pacific"
+        UserOption.objects.set_value(user=self.user, key="timezone", value=est)
+        result = generate_incident_trigger_email_context(
+            self.project,
+            incident,
+            action.alert_rule_trigger,
+            trigger_status,
+            IncidentStatus(incident.status),
+            self.user,
+        )
+        assert result["timezone"] == est
+
+        UserOption.objects.set_value(user=self.user, key="timezone", value=pst)
+        result = generate_incident_trigger_email_context(
+            self.project,
+            incident,
+            action.alert_rule_trigger,
+            trigger_status,
+            IncidentStatus(incident.status),
+            self.user,
+        )
+        assert result["timezone"] == pst

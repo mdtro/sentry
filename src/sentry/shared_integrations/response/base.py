@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import OrderedDict
 from typing import Any, Mapping
 
 import requests
@@ -35,7 +34,7 @@ class BaseApiResponse:
     @cached_property  # type: ignore
     def rel(self) -> Mapping[str, str]:
         link_header = (self.headers or {}).get("Link", "")
-        parsed_links = requests.utils.parse_header_links(link_header)  # type: ignore
+        parsed_links = requests.utils.parse_header_links(link_header)
         return {item["rel"]: item["url"] for item in parsed_links}
 
     @classmethod
@@ -73,7 +72,7 @@ class BaseApiResponse:
         # to decode it anyways
         if "application/json" not in response.headers.get("Content-Type", ""):
             try:
-                data = json.loads(response.text, object_pairs_hook=OrderedDict)
+                data = json.loads(response.text)
             except (TypeError, ValueError):
                 if allow_text:
                     return TextApiResponse(response.text, response.headers, response.status_code)
@@ -83,7 +82,7 @@ class BaseApiResponse:
         elif response.text == "":
             return TextApiResponse(response.text, response.headers, response.status_code)
         else:
-            data = json.loads(response.text, object_pairs_hook=OrderedDict)
+            data = json.loads(response.text)
 
         if isinstance(data, dict):
             return MappingApiResponse(data, response.headers, response.status_code)

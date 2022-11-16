@@ -1,11 +1,22 @@
-__all__ = ("create_name_mapping_layers", "get_mri", "get_public_name_from_mri")
+__all__ = (
+    "create_name_mapping_layers",
+    "get_mri",
+    "get_public_name_from_mri",
+    "parse_expression",
+    "get_operation_with_public_name",
+)
 
 
 from enum import Enum
-from typing import Dict, Union, cast
+from typing import Dict, Optional, Tuple, Union, cast
 
 from sentry.api.utils import InvalidParams
-from sentry.snuba.metrics.naming_layer.mri import SessionMRI, TransactionMRI
+from sentry.snuba.metrics.naming_layer.mri import (
+    MRI_EXPRESSION_REGEX,
+    MRI_SCHEMA_REGEX,
+    SessionMRI,
+    TransactionMRI,
+)
 from sentry.snuba.metrics.naming_layer.public import SessionMetricKey, TransactionMetricKey
 
 
@@ -55,6 +66,7 @@ def get_mri(external_name: Union[Enum, str]) -> str:
 
 
 def get_public_name_from_mri(internal_name: Union[TransactionMRI, SessionMRI, str]) -> str:
+    """Returns the public name from a MRI if it has a mapping to a public metric name, otherwise raise an exception"""
     if not len(MRI_TO_NAME):
         create_name_mapping_layers()
 
@@ -62,7 +74,45 @@ def get_public_name_from_mri(internal_name: Union[TransactionMRI, SessionMRI, st
         internal_name = internal_name.value
     assert isinstance(internal_name, str)
 
-    try:
+    if internal_name in MRI_TO_NAME:
         return MRI_TO_NAME[internal_name]
-    except KeyError:
+    elif (alias := extract_custom_measurement_alias(internal_name)) is not None:
+        return alias
+    else:
         raise InvalidParams(f"Unable to find a mri reverse mapping for '{internal_name}'.")
+
+
+def is_private_mri(internal_name: Union[TransactionMRI, SessionMRI, str]) -> bool:
+    try:
+        get_public_name_from_mri(internal_name)
+        return False
+    except InvalidParams:
+        return True
+
+
+def extract_custom_measurement_alias(internal_name: str) -> Optional[str]:
+    match = MRI_SCHEMA_REGEX.match(internal_name)
+    if (
+        match is not None
+        and match.group("entity") == "d"
+        and match.group("namespace") == "transactions"
+    ):
+        return match.group("name")
+    else:
+        return None
+
+
+def get_operation_with_public_name(operation: Optional[str], metric_mri: str) -> str:
+    return (
+        f"{operation}({get_public_name_from_mri(metric_mri)})"
+        if operation is not None
+        else metric_mri
+    )
+
+
+def parse_expression(name: str) -> Tuple[Optional[str], str]:
+    matches = MRI_EXPRESSION_REGEX.match(name)
+    if matches:
+        # operation, metric_mri
+        return matches[1], matches[2]
+    return None, name

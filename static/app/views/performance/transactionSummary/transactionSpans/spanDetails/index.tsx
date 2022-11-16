@@ -14,12 +14,7 @@ import useProjects from 'sentry/utils/useProjects';
 
 import {getTransactionName} from '../../../utils';
 import {NoAccess, redirectToPerformanceHomepage} from '../../pageLayout';
-import {
-  generateSpansEventView,
-  parseSpanSlug,
-  SPAN_RELATIVE_PERIODS,
-  SPAN_RETENTION_DAYS,
-} from '../utils';
+import {generateSpansEventView, parseSpanSlug} from '../utils';
 
 import SpanDetailsContent from './content';
 
@@ -52,20 +47,14 @@ export default function SpanDetails(props: Props) {
       projectSlug={project?.slug}
     >
       <Feature
-        features={['performance-view', 'performance-suspect-spans-view']}
+        features={['performance-view']}
         organization={organization}
         renderDisabled={NoAccess}
       >
         <PageFiltersContainer
-          lockedMessageSubject={t('transaction')}
           shouldForceProject={defined(project)}
           forceProject={project}
           specificProjectSlugs={defined(project) ? [project.slug] : []}
-          disableMultipleProjectSelection
-          showProjectSettingsLink
-          relativeDateOptions={SPAN_RELATIVE_PERIODS}
-          maxPickableDays={SPAN_RETENTION_DAYS}
-          hideGlobalHeader
         >
           <StyledPageContent>
             <NoProjectMessage organization={organization}>

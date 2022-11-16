@@ -1,3 +1,6 @@
+// Mirrors src/sentry/utils/platform_categories.py
+// When changing this file, make sure to keep src/sentry/utils/platform_categories.py in sync.
+
 import {t} from 'sentry/locale';
 
 export const popularPlatformCategories = [
@@ -7,6 +10,7 @@ export const popularPlatformCategories = [
   'python-django',
   'python',
   'python-flask',
+  'python-fastapi',
   'ruby-rails',
   'node-express',
   'php-laravel',
@@ -40,6 +44,8 @@ export const frontend = [
   'javascript-gatsby',
   'javascript-vue',
   'javascript-nextjs',
+  'javascript-remix',
+  'javascript-svelte',
   'unity',
 ] as const;
 
@@ -55,6 +61,7 @@ export const mobile = [
   'flutter',
   'dart-flutter',
   'unity',
+  'dotnet-maui',
   'dotnet-xamarin',
   'unreal',
   // Old platforms
@@ -91,6 +98,8 @@ export const backend = [
   'python',
   'python-django',
   'python-flask',
+  'python-fastapi',
+  'python-starlette',
   'python-sanic',
   'python-celery',
   'python-bottle',
@@ -121,6 +130,7 @@ export const desktop = [
   'dotnet',
   'dotnet-winforms',
   'dotnet-wpf',
+  'dotnet-maui',
   'java',
   'electron',
   'javascript-electron',
@@ -158,7 +168,7 @@ export const tracing = [
   'react-native-tracing',
 ] as const;
 
-export const performance: PlatformKey[] = [
+export const performance = [
   'javascript',
   'javascript-ember',
   'javascript-react',
@@ -168,6 +178,8 @@ export const performance: PlatformKey[] = [
   'python',
   'python-django',
   'python-flask',
+  'python-fastapi',
+  'python-starlette',
   'python-sanic',
   'python-celery',
   'python-bottle',
@@ -181,6 +193,19 @@ export const performance: PlatformKey[] = [
   'node-connect',
 ];
 
+// List of platforms that have performance onboarding checklist content
+export const withPerformanceOnboarding: Set<PlatformKey> = new Set([
+  'javascript',
+  'javascript-react',
+]);
+
+// List of platforms that do not have performance support. We make use of this list in the product to not provide any Performance
+// views such as Performance onboarding checklist.
+export const withoutPerformanceSupport: Set<PlatformKey> = new Set([
+  'elixir',
+  'minidump',
+]);
+
 export const releaseHealth: PlatformKey[] = [
   // frontend
   'javascript',
@@ -192,6 +217,8 @@ export const releaseHealth: PlatformKey[] = [
   'javascript-gatsby',
   'javascript-vue',
   'javascript-nextjs',
+  'javascript-remix',
+  'javascript-svelte',
   // mobile
   'android',
   'apple-ios',
@@ -209,6 +236,8 @@ export const releaseHealth: PlatformKey[] = [
   'python',
   'python-django',
   'python-flask',
+  'python-fastapi',
+  'python-starlette',
   'python-sanic',
   'python-celery',
   'python-bottle',
@@ -224,6 +253,40 @@ export const releaseHealth: PlatformKey[] = [
   'native-crashpad',
   'native-breakpad',
   'native-qt',
+];
+
+export const replayPlatforms: readonly PlatformKey[] = [
+  'javascript-angular',
+  // 'javascript-angularjs', // Unsupported, angularjs requires the v6.x core SDK
+  'javascript-backbone',
+  'javascript-ember',
+  'javascript-gatsby',
+  'javascript-nextjs',
+  'javascript-react',
+  'javascript-remix',
+  'javascript-svelte',
+  'javascript-vue',
+  'javascript',
+];
+
+/**
+ * The list of platforms for which we have created onboarding instructions.
+ * Should be a subset of the list of `replayPlatforms`.
+ * This should match sentry-docs: `/src/wizard/${platform}/replay-onboarding/${subPlatform}/`.
+ * See: https://github.com/getsentry/sentry-docs/tree/master/src/wizard/javascript/replay-onboarding
+ */
+export const replayOnboardingPlatforms: readonly PlatformKey[] = [
+  'javascript-angular',
+  // 'javascript-angularjs', // Unsupported, angularjs requires the v6.x core SDK
+  // 'javascript-backbone', // No docs yet
+  'javascript-ember',
+  'javascript-gatsby',
+  'javascript-nextjs',
+  'javascript-react',
+  'javascript-remix',
+  'javascript-svelte',
+  'javascript-vue',
+  'javascript',
 ];
 
 /**

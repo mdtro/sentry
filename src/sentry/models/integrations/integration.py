@@ -4,7 +4,8 @@ from typing import Any, Sequence
 from django.db import IntegrityError, models
 
 from sentry.constants import ObjectStatus
-from sentry.db.models import BoundedPositiveIntegerField, DefaultFieldsModel, EncryptedJsonField
+from sentry.db.models import BoundedPositiveIntegerField, DefaultFieldsModel, region_silo_only_model
+from sentry.db.models.fields.jsonfield import JSONField
 from sentry.db.models.manager import BaseManager
 from sentry.models.integrations.organization_integration import OrganizationIntegration
 from sentry.models.integrations.project_integration import ProjectIntegration
@@ -22,6 +23,7 @@ class IntegrationManager(BaseManager):
         )
 
 
+@region_silo_only_model
 class Integration(DefaultFieldsModel):
     __include_in_export__ = False
 
@@ -37,7 +39,7 @@ class Integration(DefaultFieldsModel):
     # metadata might be used to store things like credentials, but it should NOT
     # be used to store organization-specific information, as the Integration
     # instance is shared among multiple organizations
-    metadata = EncryptedJsonField(default=dict)
+    metadata = JSONField(default=dict)
     status = BoundedPositiveIntegerField(
         default=ObjectStatus.VISIBLE, choices=ObjectStatus.as_choices(), null=True
     )

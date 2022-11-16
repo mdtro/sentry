@@ -107,6 +107,7 @@ const Cell = styled('div')`
   text-align: right;
   color: ${p => p.theme.subText};
   ${p => p.theme.overflowEllipsis}
+  font-size: ${p => p.theme.fontSizeMedium};
 `;
 
 const NumericCell = styled(Cell)`
@@ -175,9 +176,7 @@ const ChartTableRow = styled('label')<{
 
   &:hover {
     cursor: pointer;
-    ${/* sc-selector */ Cell}, ${/* sc-selector */ NumericCell}, ${
-      /* sc-selector */ DescriptionCell
-    },${/* sc-selector */ ExpanderCell}, ${/* sc-selector */ TitleWrapper} {
+    ${Cell}, ${NumericCell}, ${DescriptionCell}, ${ExpanderCell}, ${TitleWrapper} {
       ${p => !p.isLoading && `background-color: ${p.theme.bodyBackground}`}
     }
   }

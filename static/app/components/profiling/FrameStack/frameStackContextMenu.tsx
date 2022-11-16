@@ -12,7 +12,8 @@ import {useContextMenu} from 'sentry/utils/profiling/hooks/useContextMenu';
 
 interface FrameStackContextMenuProps {
   contextMenu: ReturnType<typeof useContextMenu>;
-  onZoomIntoNodeClick: (evt: React.MouseEvent<HTMLDivElement>) => void;
+  onHighlightAllFramesClick: (evt: React.MouseEvent<HTMLDivElement>) => void;
+  onZoomIntoFrameClick: (evt: React.MouseEvent<HTMLDivElement>) => void;
 }
 
 export function FrameStackContextMenu(props: FrameStackContextMenuProps) {
@@ -29,12 +30,18 @@ export function FrameStackContextMenu(props: FrameStackContextMenuProps) {
         }}
       >
         <ProfilingContextMenuGroup>
-          <ProfilingContextMenuHeading>{t('Flamegraph')}</ProfilingContextMenuHeading>
+          <ProfilingContextMenuHeading>{t('Actions')}</ProfilingContextMenuHeading>
           <ProfilingContextMenuItem
             {...props.contextMenu.getMenuItemProps()}
-            onClick={props.onZoomIntoNodeClick}
+            onClick={props.onZoomIntoFrameClick}
           >
-            {t('Scope view to this node')}
+            {t('Show on flamechart')}
+          </ProfilingContextMenuItem>
+          <ProfilingContextMenuItem
+            {...props.contextMenu.getMenuItemProps()}
+            onClick={props.onHighlightAllFramesClick}
+          >
+            {t('Highlight all occurrences')}
           </ProfilingContextMenuItem>
         </ProfilingContextMenuGroup>
       </ProfilingContextMenu>

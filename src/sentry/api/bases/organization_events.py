@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from datetime import timedelta
-from typing import Any, Callable, Dict, Generator, Optional, Sequence, cast
+from typing import Any, Callable, Dict, Generator, Optional, Sequence, Tuple, cast
 
 import sentry_sdk
 from django.utils import timezone
@@ -16,11 +16,11 @@ from sentry.api.helpers.teams import get_teams
 from sentry.api.serializers.snuba import BaseSnubaSerializer, SnubaTSResultSerializer
 from sentry.discover.arithmetic import ArithmeticError, is_equation, strip_equation
 from sentry.exceptions import IncompatibleMetricsQuery, InvalidSearchQuery
-from sentry.models import Organization, Project, Team
-from sentry.models.group import Group
-from sentry.search.events.constants import TIMEOUT_ERROR_MESSAGE
+from sentry.models import Group, Organization, Project, Team
+from sentry.search.events.constants import DURATION_UNITS, SIZE_UNITS, TIMEOUT_ERROR_MESSAGE
 from sentry.search.events.fields import get_function_alias
-from sentry.snuba import discover, metrics_enhanced_performance, metrics_performance
+from sentry.search.events.types import SnubaParams
+from sentry.snuba import discover, metrics_enhanced_performance, metrics_performance, profiles
 from sentry.utils import snuba
 from sentry.utils.cursors import Cursor
 from sentry.utils.dates import get_interval_from_range, get_rollup_from_request, parse_stats_period
@@ -33,6 +33,7 @@ DATASET_OPTIONS = {
     "discover": discover,
     "metricsEnhanced": metrics_enhanced_performance,
     "metrics": metrics_performance,
+    "profiles": profiles,
 }
 
 
@@ -44,9 +45,13 @@ def resolve_axis_column(column: str, index: int = 0) -> str:
 
 class OrganizationEventsEndpointBase(OrganizationEndpoint):  # type: ignore
     def has_feature(self, organization: Organization, request: Request) -> bool:
-        return features.has(
-            "organizations:discover-basic", organization, actor=request.user
-        ) or features.has("organizations:performance-view", organization, actor=request.user)
+        return (
+            features.has("organizations:discover-basic", organization, actor=request.user)
+            or features.has("organizations:performance-view", organization, actor=request.user)
+            or features.has(
+                "organizations:performance-issues-all-events-tab", organization, actor=request.user
+            )
+        )
 
     def get_equation_list(self, organization: Organization, request: Request) -> Sequence[str]:
         """equations have a prefix so that they can be easily included alongside our existing fields"""
@@ -58,6 +63,9 @@ class OrganizationEventsEndpointBase(OrganizationEndpoint):  # type: ignore
         return [field for field in request.GET.getlist("field")[:] if not is_equation(field)]
 
     def get_team_ids(self, request: Request, organization: Organization) -> Sequence[int]:
+        return [team.id for team in self.get_teams(request, organization)]
+
+    def get_teams(self, request: Request, organization: Organization) -> Sequence[Team]:
         if not request.user:
             return []
 
@@ -65,13 +73,49 @@ class OrganizationEventsEndpointBase(OrganizationEndpoint):  # type: ignore
         if not teams:
             teams = Team.objects.get_for_user(organization, request.user)
 
-        return [team.id for team in teams]
+        return [team for team in teams]
 
     def get_dataset(self, request: Request) -> Any:
         dataset_label = request.GET.get("dataset", "discover")
         if dataset_label not in DATASET_OPTIONS:
             raise ParseError(detail=f"dataset must be one of: {', '.join(DATASET_OPTIONS.keys())}")
         return DATASET_OPTIONS[dataset_label]
+
+    def get_snuba_dataclass(
+        self, request: Request, organization: Organization, check_global_views: bool = True
+    ) -> Tuple[SnubaParams, Dict[str, Any]]:
+        """This will eventually replace the get_snuba_params function"""
+        with sentry_sdk.start_span(op="discover.endpoint", description="filter_params(dataclass)"):
+            if (
+                len(self.get_field_list(organization, request))
+                + len(self.get_equation_list(organization, request))
+                > MAX_FIELDS
+            ):
+                raise ParseError(
+                    detail=f"You can view up to {MAX_FIELDS} fields at a time. Please delete some and try again."
+                )
+
+            filter_params: Dict[str, Any] = self.get_filter_params(request, organization)
+            filter_params = self.quantize_date_params(request, filter_params)
+            params = SnubaParams(
+                start=filter_params["start"],
+                end=filter_params["end"],
+                environments=filter_params.get("environment_objects", []),
+                projects=filter_params["project_objects"],
+                user=request.user if request.user else None,
+                teams=self.get_teams(request, organization),
+                organization=organization,
+            )
+
+            if check_global_views:
+                has_global_views = features.has(
+                    "organizations:global-views", organization, actor=request.user
+                )
+                if not has_global_views and len(params.projects) > 1:
+                    raise ParseError(detail="You cannot view events from multiple projects.")
+
+            # Return both for now
+            return params, filter_params
 
     def get_snuba_params(
         self, request: Request, organization: Organization, check_global_views: bool = True
@@ -214,6 +258,23 @@ class OrganizationEventsV2EndpointBase(OrganizationEventsEndpointBase):
             has_results="true" if bool(cursor) else "false",
         )
 
+    def handle_unit_meta(
+        self, meta: Dict[str, str]
+    ) -> Tuple[Dict[str, str], Dict[str, Optional[str]]]:
+        units: Dict[str, Optional[str]] = {}
+        for key, value in meta.items():
+            if value in SIZE_UNITS:
+                units[key] = value
+                meta[key] = "size"
+            elif value in DURATION_UNITS:
+                units[key] = value
+                meta[key] = "duration"
+            elif value == "duration":
+                units[key] = "millisecond"
+            else:
+                units[key] = None
+        return meta, units
+
     def handle_results_with_meta(
         self,
         request: Request,
@@ -225,16 +286,21 @@ class OrganizationEventsV2EndpointBase(OrganizationEventsEndpointBase):
         with sentry_sdk.start_span(op="discover.endpoint", description="base.handle_results"):
             data = self.handle_data(request, organization, project_ids, results.get("data"))
             meta = results.get("meta", {})
+            fields_meta = meta.get("fields", {})
 
             if standard_meta:
                 isMetricsData = meta.pop("isMetricsData", False)
+                fields, units = self.handle_unit_meta(fields_meta)
                 meta = {
-                    "fields": meta,
+                    "fields": fields,
+                    "units": units,
                     "isMetricsData": isMetricsData,
-                    "tips": results.get("tips", {}),
+                    "tips": meta.get("tips", {}),
                 }
-            # TODO(wmak): Check if the performance facets histogram endpoint actually needs meta as a list
-            elif isinstance(meta, dict) and "isMetricsData" not in meta:
+            else:
+                meta = fields_meta
+
+            if "isMetricsData" not in meta:
                 meta["isMetricsData"] = False
 
             if not data:
@@ -366,8 +432,11 @@ class OrganizationEventsV2EndpointBase(OrganizationEventsEndpointBase):
                 for key, event_result in result.items():
                     if is_multiple_axis:
                         results[key] = self.serialize_multiple_axis(
+                            request,
+                            organization,
                             serializer,
                             event_result,
+                            params,
                             columns,
                             query_columns,
                             allow_partial_buckets,
@@ -384,8 +453,11 @@ class OrganizationEventsV2EndpointBase(OrganizationEventsEndpointBase):
                 serialized_result = results
             elif is_multiple_axis:
                 serialized_result = self.serialize_multiple_axis(
+                    request,
+                    organization,
                     serializer,
                     result,
+                    params,
                     columns,
                     query_columns,
                     allow_partial_buckets,
@@ -404,13 +476,19 @@ class OrganizationEventsV2EndpointBase(OrganizationEventsEndpointBase):
                     zerofill_results=zerofill_results,
                     extra_columns=extra_columns,
                 )
+                serialized_result["meta"] = self.handle_results_with_meta(
+                    request, organization, params.get("project_id", []), result.data, True
+                )["meta"]
 
             return serialized_result
 
     def serialize_multiple_axis(
         self,
+        request: Request,
+        organization: Organization,
         serializer: BaseSnubaSerializer,
         event_result: SnubaTSResult,
+        params: Dict[str, Any],
         columns: Sequence[str],
         query_columns: Sequence[str],
         allow_partial_buckets: bool,
@@ -419,6 +497,9 @@ class OrganizationEventsV2EndpointBase(OrganizationEventsEndpointBase):
         # Return with requested yAxis as the key
         result = {}
         equations = 0
+        meta = self.handle_results_with_meta(
+            request, organization, params.get("project_id", []), event_result.data, True
+        )["meta"]
         for index, query_column in enumerate(query_columns):
             result[columns[index]] = serializer.serialize(
                 event_result,
@@ -429,6 +510,7 @@ class OrganizationEventsV2EndpointBase(OrganizationEventsEndpointBase):
             )
             if is_equation(query_column):
                 equations += 1
+            result[columns[index]]["meta"] = meta
         # Set order if multi-axis + top events
         if "order" in event_result.data:
             result["order"] = event_result.data["order"]

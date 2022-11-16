@@ -32,7 +32,7 @@ import {
 import {getUtcDateString} from 'sentry/utils/dates';
 import {TableDataRow} from 'sentry/utils/discover/discoverQuery';
 import EventView from 'sentry/utils/discover/eventView';
-import {MobileVital, WebVital} from 'sentry/utils/discover/fields';
+import {MobileVital, SpanOpBreakdown, WebVital} from 'sentry/utils/fields';
 import {formatVersion} from 'sentry/utils/formatters';
 import {decodeScalar} from 'sentry/utils/queryString';
 import routeTitleGen from 'sentry/utils/routeTitle';
@@ -48,7 +48,12 @@ import {
   PROJECT_PERFORMANCE_TYPE,
 } from 'sentry/views/performance/utils';
 
-import {getReleaseParams, isReleaseArchived, ReleaseBounds} from '../../utils';
+import {
+  getReleaseParams,
+  isReleaseArchived,
+  ReleaseBounds,
+  searchReleaseVersion,
+} from '../../utils';
 import {ReleaseContext} from '..';
 
 import CommitAuthorBreakdown from './sidebar/commitAuthorBreakdown';
@@ -127,7 +132,7 @@ class ReleaseOverview extends AsyncView<Props> {
       id: undefined,
       version: 2,
       name: `Release ${formatVersion(version)}`,
-      query: `event.type:transaction release:${version}`,
+      query: `event.type:transaction ${searchReleaseVersion(version)}`,
       fields: ['transaction', 'failure_count()', 'epm()', 'p50()'],
       orderby: '-failure_count',
       range: statsPeriod || undefined,
@@ -204,9 +209,9 @@ class ReleaseOverview extends AsyncView<Props> {
               `p75(${WebVital.FID})`,
               `p75(${WebVital.LCP})`,
               `p75(${WebVital.CLS})`,
-              'p75(spans.http)',
-              'p75(spans.browser)',
-              'p75(spans.resource)',
+              `p75(${SpanOpBreakdown.SpansHttp})`,
+              `p75(${SpanOpBreakdown.SpansBrowser})`,
+              `p75(${SpanOpBreakdown.SpansResource})`,
             ],
           }) as EventView)
         : performanceType === PROJECT_PERFORMANCE_TYPE.BACKEND
@@ -438,7 +443,10 @@ class ReleaseOverview extends AsyncView<Props> {
                 errored: allReleasesErrored,
                 response: allReleases,
               }) => (
-                <SessionsRequest {...sessionsRequestProps} query={`release:"${version}"`}>
+                <SessionsRequest
+                  {...sessionsRequestProps}
+                  query={searchReleaseVersion(version)}
+                >
                   {({
                     loading: thisReleaseLoading,
                     reloading: thisReleaseReloading,
@@ -458,7 +466,7 @@ class ReleaseOverview extends AsyncView<Props> {
                           )}
                           <ReleaseDetailsPageFilters>
                             <EnvironmentPageFilter />
-                            <StyledPageTimeRangeSelector
+                            <PageTimeRangeSelector
                               organization={organization}
                               relative={period ?? ''}
                               start={start ?? null}
@@ -716,10 +724,10 @@ const ReleaseDetailsPageFilters = styled('div')`
   grid-template-columns: minmax(0, max-content) 1fr;
   gap: ${space(2)};
   margin-bottom: ${space(2)};
-`;
 
-const StyledPageTimeRangeSelector = styled(PageTimeRangeSelector)`
-  height: 40px;
+  @media (max-width: ${p => p.theme.breakpoints.small}) {
+    grid-template-columns: auto;
+  }
 `;
 
 export default withApi(withPageFilters(withOrganization(ReleaseOverview)));

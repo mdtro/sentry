@@ -7,9 +7,11 @@ from sentry.models import ExternalIssue, Integration
 from sentry.testutils import APITestCase
 from sentry.testutils.factories import DEFAULT_EVENT_DATA
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
 from sentry.utils import json
 
 
+@region_silo_test
 class BitbucketIssueTest(APITestCase):
     def setUp(self):
         self.base_url = "https://api.bitbucket.org"
@@ -57,7 +59,9 @@ class BitbucketIssueTest(APITestCase):
 
         data = {"repo": repo, "externalIssue": issue_id, "comment": "hello"}
 
-        assert self.integration.get_installation(None).get_issue(issue_id, data=data) == {
+        assert self.integration.get_installation(self.organization.id).get_issue(
+            issue_id, data=data
+        ) == {
             "key": issue_id,
             "description": "This is the description",
             "title": "hello",

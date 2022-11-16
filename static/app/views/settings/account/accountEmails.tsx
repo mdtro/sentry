@@ -7,7 +7,7 @@ import AlertLink from 'sentry/components/alertLink';
 import AsyncComponent from 'sentry/components/asyncComponent';
 import Button from 'sentry/components/button';
 import ButtonBar from 'sentry/components/buttonBar';
-import Form from 'sentry/components/forms/form';
+import Form, {FormProps} from 'sentry/components/forms/form';
 import JsonForm from 'sentry/components/forms/jsonForm';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import {Panel, PanelBody, PanelHeader, PanelItem} from 'sentry/components/panels';
@@ -37,7 +37,7 @@ class AccountEmails extends AsyncView<Props, State> {
     return [];
   }
 
-  handleSubmitSuccess: Form['props']['onSubmitSuccess'] = (_change, model, id) => {
+  handleSubmitSuccess: FormProps['onSubmitSuccess'] = (_change, model, id) => {
     if (id === undefined) {
       return;
     }
@@ -175,12 +175,12 @@ const EmailRow = ({
     </EmailTags>
     <ButtonBar gap={1}>
       {!isPrimary && isVerified && (
-        <Button size="small" onClick={e => onSetPrimary?.(email, e)}>
+        <Button size="sm" onClick={e => onSetPrimary?.(email, e)}>
           {t('Set as primary')}
         </Button>
       )}
       {!isVerified && (
-        <Button size="small" onClick={e => onVerify(email, e)}>
+        <Button size="sm" onClick={e => onVerify(email, e)}>
           {t('Resend verification')}
         </Button>
       )}
@@ -189,7 +189,7 @@ const EmailRow = ({
           aria-label={t('Remove email')}
           data-test-id="remove"
           priority="danger"
-          size="small"
+          size="sm"
           icon={<IconDelete />}
           onClick={e => onRemove(email, e)}
         />

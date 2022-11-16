@@ -9,10 +9,12 @@ from fixtures.page_objects.issue_details import IssueDetailsPage
 from fixtures.page_objects.issue_list import IssueListPage
 from sentry.testutils import AcceptanceTestCase, SnubaTestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
 
 event_time = before_now(days=3).replace(tzinfo=pytz.utc)
 
 
+@region_silo_test
 class OrganizationGlobalHeaderTest(AcceptanceTestCase, SnubaTestCase):
     def setUp(self):
         super().setUp()
@@ -165,7 +167,7 @@ class OrganizationGlobalHeaderTest(AcceptanceTestCase, SnubaTestCase):
             self.issues_list.visit_issue_list(self.org.slug)
             self.issues_list.wait_until_loaded()
             assert "environment=" not in self.browser.current_url
-            assert self.issue_details.global_selection.get_selected_environment() == "All Env"
+            assert self.issue_details.global_selection.get_selected_environment() == "All Envs"
 
             self.browser.click('[data-test-id="page-filter-environment-selector"]')
             self.browser.click('[data-test-id="environment-prod"]')
@@ -179,7 +181,7 @@ class OrganizationGlobalHeaderTest(AcceptanceTestCase, SnubaTestCase):
             self.browser.click('[data-test-id="page-filter-environment-selector"]')
             self.issues_list.wait_until_loaded()
             assert "environment=" not in self.browser.current_url
-            assert self.issue_details.global_selection.get_selected_environment() == "All Env"
+            assert self.issue_details.global_selection.get_selected_environment() == "All Envs"
 
             """
             navigate back through history to the beginning
@@ -194,7 +196,7 @@ class OrganizationGlobalHeaderTest(AcceptanceTestCase, SnubaTestCase):
             self.browser.back()
             self.issues_list.wait_until_loaded()
             assert "environment=" not in self.browser.current_url
-            assert self.issue_details.global_selection.get_selected_environment() == "All Env"
+            assert self.issue_details.global_selection.get_selected_environment() == "All Envs"
 
             """
             navigate forward through history to the end
@@ -209,7 +211,7 @@ class OrganizationGlobalHeaderTest(AcceptanceTestCase, SnubaTestCase):
             self.browser.forward()
             self.issues_list.wait_until_loaded()
             assert "environment=" not in self.browser.current_url
-            assert self.issue_details.global_selection.get_selected_environment() == "All Env"
+            assert self.issue_details.global_selection.get_selected_environment() == "All Envs"
 
     def test_global_selection_header_loads_with_correct_project_with_multi_project(self):
         """

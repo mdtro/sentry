@@ -1,3 +1,189 @@
+22.11.0
+-------
+
+### Derived code mappings (Internal Release) (ongoing)
+
+This milestones add support for creating Python code mappings automatically for orgs with the Github integration installed.
+
+This milestone initially focuses on Python projects.
+
+Future work described in this RFC: https://github.com/getsentry/rfcs/blob/main/text/0016-auto-code-mappings.md
+
+By: @snigdhas (#41147, #41036, #40882, #40973, #40934, #40881, #40717, #40528, #40465, #40271), @armenzg (#41131, #41067, #40892, #40781, #40764, #40729, #40671, #40461, #40190, #40101), @scttcper (#40593)
+
+### Derived code mappings (EA release - Python only) (ongoing)
+
+This adds the ability of deriving code mappings automatically for all orgs using Python and Github at first.
+
+See RFC for details: https://github.com/getsentry/rfcs/blob/main/text/0016-auto-code-mappings.md
+
+By: @armenzg (#41313, #41199, #41132, #41125, #41083), @snigdhas (#41097, #41038, #41080, #41003, #41000, #40991, #40979)
+
+### Various fixes & improvements
+
+- feat(profiling): Add release to profile payload (#41282) by @Zylphrex
+- fix(tests): escape `.` in regex passed to findByText (#41391) by @mdtro
+- test(js): Convert DashboardList to RTL (#41375) by @malwilley
+- test(js): Convert SentryApplicationDetails to RTL (#41378) by @evanpurkhiser
+- feat(profiling): profiling onboarding sidebar (#41322) by @eliashussary
+- feat(useStacktraceLink): add hook to fetch stack trace link (#41269) by @JonasBa
+- dep(profiling): Bump sentry sdk for updated profiler (#41324) by @Zylphrex
+- feat(analytics): Record analytics for first profile sent (#41315) by @Zylphrex
+- perf(users-endpoint): Improve users endpoint performance more (#41347) by @Zylphrex
+- fix(metrics): Use parameterize instead of for loop in test (#41316) by @iambriccardo
+- ref(perf-issues): Add projectoption for enabling individual detector (#41328) by @k-fish
+- ref(contexts): Prettify only known contexts - (#41379) by @priscilawebdev
+- ci(jest): regenerate jest-balance.json (#41377) by @getsentry-bot
+- fix(code-mappings): Always add a trailing backslash for codemappings (#41330) by @snigdhas
+- fix(replays): Adjust Replay Details layout(s) dimensions (#41331) by @jesus4497
+- test(js): Convert ManageDashboards test to RTL (#41352) by @malwilley
+- feat(monitors): Tag error events with monitor id (#41291) by @davidenwang
+- ref(access): Dataclass to represent (requires_sso, sso_is_valid) pairs (#41239) by @RyanSkonnord
+- test(js): Convert organizationAuthList to RTL (#41309) by @evanpurkhiser
+- feat(hybrid-cloud): Add /user-feedback/* Django route (#41326) by @dashed
+- test(js): Convert teamKeyTransactionButton to RTL (#41308) by @evanpurkhiser
+- Customize pip-compile header (#41334) by @atugushev
+- ref: fix typing in sentry.integrations.slack (#41314) by @asottile-sentry
+- feat(hybrid-cloud): Add /issues/* Django route (#41333) by @dashed
+
+_Plus 1017 more_
+
+22.10.0
+-------
+
+### Automatic code mappings for Python/Github projects (ongoing)
+
+This milestones add support for creating Python code mappings automatically for orgs with the Github integration installed.
+
+Future work described in this RFC: https://github.com/getsentry/rfcs/blob/main/text/0016-auto-code-mappings.md
+
+By: @armenzg (#39975, #39750)
+
+### Various fixes & improvements
+
+- Revert "feat(commit-context): Refactor Issue Owner auto-assignment (#40048)" (#40081) by @wedamija
+- ref(emails): Update perf issue email subject (#40072) by @ceorourke
+- test(js): Convert AcceptOrganizationInvite to RTL (#39809) by @evanpurkhiser
+- ref: improve pin_github_action ref matching (#40067) by @asottile-sentry
+- test(ui): Convert SelectAsyncField test to RTL (#40060) by @malwilley
+- test(js): Convert TableField test to RTL (#40064) by @malwilley
+- deps(ui): Upgrade to jest v29 (#40070) by @scttcper
+- test: Use initialProps when testing hooks with reactHooks.renderHook (#39532) by @ryan953
+- feat(hybrid-cloud): Add a test for file upload (#39931) by @AniketDas-Tekky
+- feat(ui): Add aria-describedby to form inputs (#40037) by @evanpurkhiser
+- feat(commit-context): Refactor Issue Owner auto-assignment (#40048) by @NisanthanNanthakumar
+- chore(hybrid-cloud): ORM decorators updated. (#40022) by @corps
+- ref(email): Add performance issue alert email template (#39948) by @ceorourke
+- test(js): Rebalance tests (#40036) by @evanpurkhiser
+- fix(all-events) issue where events tab makes extra api call (#40056) by @DominikB2014
+- feat(all-events) Add minidump all events (#40049) by @DominikB2014
+- feat(perf_issues): Only send error issues to digests system (#40050) by @wedamija
+- feat(commit-context): Support GitLab (#39381) by @NisanthanNanthakumar
+- ref: Mark batching kafka consumer as deprecated (#40044) by @lynnagara
+- ref(gitlab): No need to show token (#40045) by @armenzg
+- Add all inclusive resources (#40047) by @0Calories
+- feat(charts): Add auto-generated aria labels (#39653) by @vuluongj20
+- fix(auth): Fix `device-failed` position (#40011) by @vuluongj20
+- feat(replays): Add Slowest Transaction Column To Transaction Replay Table (#39930) by @danecando
+
+_Plus 916 more_
+
+22.9.0
+------
+
+### Various fixes & improvements
+
+- fix(js): Avoid constructing API inside fetchOrganizationDetails (#38859) by @evanpurkhiser
+- feat(codeowners): Add assignee dropdown codeowners copy (#38832) by @scttcper
+- test(ui): Convert project install tests to RTL (#38866) by @scttcper
+- feat(dashboards): widgets use mep setting provider to determine if requests should be metricsEnhanced or not (#38810) by @edwardgou-sentry
+- feat(replays): Change replay event tags type and update UI (#38604) by @jesus4497
+- ref: Continue typing eventstream (#38858) by @lynnagara
+- feat(sidebar): open up broadcasts if #whats-new is the hash (#38838) by @scefali
+- Added question tooltip beside processed baseline toggle. (#38875) by @Abdkhan14
+- feat(perf-issues): Add analytics event to count num of perf issues on issues stream page (#38876) by @0Calories
+- feat(metrics): Add `count_web_vitals` to metrics layer [TET-161] (#38873) by @ahmedetefy
+- feat(dashboard): Flip top level query filter flag (#38829) by @narsaynorath
+- ref(dashboards): Delete deprecated dashboard tests (#38872) by @edwardgou-sentry
+- chore(perf-issues): Add issue creation rate limiter metrics (#38874) by @udameli
+- ref(perf-issues): prettify test event JSON (#38871) by @mjq-sentry
+- feat(perf_issues): Make `GroupTagKeyValuesEndpoint` work with perf issues (#38865) by @wedamija
+- feat(profiling): add links to profiledetails (#38824) by @eliashussary
+- fix(perf-issues): N+1 with odd number of potential sources missed (#38862) by @mjq-sentry
+- feat(perf_issues): Default `sentry:performance_issue_creation_rate` to 1.0, and gate perf issue creation using `performance-issues-ingest` (#38864) by @wedamija
+- feat(perf_issues): Explicitly hide performance issues from search if feature flag is disabled (#38863) by @wedamija
+- feat(perf-issues): Add Performance Issues analytics (#38807) by @0Calories
+- feat(dashboards): Flip grid layout feature flag (#38827) by @narsaynorath
+- feat(metrics): Support rate for derived metric [TET-129 TET-127] (#38792) by @ahmedetefy
+- feat(metrics): Register new option [sns-1660] (#38816) by @untitaker
+- fix(datascrubbing): Limit sensitiveFields (#38803) by @jjbayer
+
+_Plus 746 more_
+
+22.8.0
+------
+
+### Various fixes & improvements
+
+- fix(breadcrumbsFilter): Fix level tag crop issue (#37777) by @vuluongj20
+- ref(dropdownMenu): Mark as deprecated (#37319) by @vuluongj20
+- feat(workflow): Remove `duplicate-alert-rule` flag (#37489) by @scttcper
+- fix(dashboards): Fix custom metrics not displaying with units correctly in widget viewer(#37807) by @edwardgou-sentry
+- feat(replays): New column size and improve of a11y (#37765) by @jesus4497
+- ref(perf): Add duplicate detection on group hash (#37787) by @k-fish
+- fix(profiling): Profiling stats response for no projects (#37772) by @Zylphrex
+- feat(replays): Normalize resources with client expectations (#37708) by @cmanallen
+- feat(dashboard-filters): Save and expose releaseId in dashboards (#37779) by @narsaynorath
+- ref: upgrade confluent-kafka to 1.9.2 (#37733) by @asottile-sentry
+- pass resolution time to get_files_changed_in_releases() (#37800) by @komal-saini
+- don't call flagr on this feature flag since we'll be hard-coding the handler (#37799) by @barkbarkimashark
+- fix(suspect-resolutions): Get files changed in releases within 5h time-window  (#37789) by @komal-saini
+- fix: explicitly define app label (#37795) by @MeredithAnya
+- fix(integrations): don't remove functions before they're actually removed (#37793) by @vpandiarajan20
+- ref(indexer): Add postgres, cloudspanner modules (#37771) by @MeredithAnya
+- Sentry Functions: Backend Webhook Integration (#37205) by @vpandiarajan20
+- ref(indexer): Deprecate DbKey (#37790) by @lynnagara
+- ref(suspect-resolutions): refactor code around (#37775) by @barkbarkimashark
+- fix(dashboard): Pass location to handleAddQueryToDashboard (#37785) by @shruthilayaj
+- fix(releases): filter out releases with projects by project membership instead of access (#37495) by @barkbarkimashark
+- feat(suspect-resolutions): track the suspect resolutions algo changes in analytics events (#37778) by @barkbarkimashark
+- Revert "fix(mep): Missed a tag resolver (#37768)" (#37782) by @k-fish
+- fix(ui): integrations text alignment (#37776) by @robinrendle
+
+_Plus 789 more_
+
+22.7.0
+------
+
+### Various fixes & improvements
+
+- ref(replays): Refactor MouseTracking component into a react hook (#36710) by @ryan953
+- feat(release-activity): backend support for tracking release activity (#36608) by @barkbarkimashark
+- feat(grouping): Add support for automatic grouping updates (#36358) by @mitsuhiko
+- feat(replays): add session replays endpoints, proxy logic (#36631) by @JoshFerge
+- fix(dashboards): Open in Discover missing in Default Dashboard (#36728) by @narsaynorath
+- chore(deps): Upgrade @sentry/* JS SDKs from 7.6.0 to 7.7.0 (#36727) by @AbhiPrasad
+- fix(mep): Remove the granularity hacks (#36724) by @wmak
+- chore(deps): Bump eslint-config-sentry 1.94 -> 1.95 (#36693) by @NisanthanNanthakumar
+- fix(test) Allow the connection name to be defined by migration tests (#36712) by @markstory
+- fix(perf) Disabled performance settings if denied access (#36675) by @DominikB2014
+- fix: Remove potentially unnecessary pip installs (#36649) by @untitaker
+- fix: Fix unbound variable if DEVENV_NO_REPORT=1 (#36650) by @untitaker
+- test(issue-details): Fix issue details create comment test (#36715) by @Zylphrex
+- ref(tags): Refactor the Tags table so the rows are independant of the styled title (#36711) by @ryan953
+- fix(ci): include workdir to cache-dependency-path in setup-sentry (#36718) by @joshuarli
+- bug(replays): Remove the custom replays navTabs, use core nav which supports with dark-mode (#36709) by @ryan953
+- feat(replays): Cleanup unneeded tabs from the Replay Details page (#36706) by @ryan953
+- feat(alert): Create metric alerts on project creation (#36582) by @Neo-Zhixing
+- fix(devserver): Start both string indexers when metrics are enabled (#36682) by @untitaker
+- feat(profiling): Ingest profile call trees (#36268) by @Zylphrex
+- ref: replace legacy compat.map with list comprehensions (api) (#36694) by @asottile-sentry
+- feat(integrations): Endpoint for SentryFunctions creation page (#36557) by @vpandiarajan20
+- tests(mep): Add missing tests for entity subscription helper functions (#36689) by @wedamija
+- feat(mep): Add `PerformanceMetricsEntitySubscription` for use with MEP alerts (#36653) by @wedamija
+
+_Plus 760 more_
+
 22.6.0
 ------
 

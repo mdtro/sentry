@@ -167,8 +167,8 @@ class QueryIntegrationTest(SnubaTestCase, TestCase):
             orderby="project",
         )
         data = result["data"]
-        assert len(data) == 3
-        assert [item["project"] for item in data] == ["", "a" * 32, "z" * 32]
+        assert len(data) == 2
+        assert [item["project"] for item in data] == ["a" * 32, "z" * 32]
 
     def test_issue_short_id_mapping(self):
         tests = [
@@ -1938,12 +1938,12 @@ class QueryIntegrationTest(SnubaTestCase, TestCase):
             self.store_event(data=data, project_id=self.project.id)
 
         queries = [
-            ("", [[0], [1], [None]]),
-            ("error.handled:true", [[1], [None]]),
-            ("!error.handled:true", [[0]]),
-            ("has:error.handled", [[1], [None]]),
-            ("has:error.handled error.handled:true", [[1], [None]]),
-            ("error.handled:false", [[0]]),
+            ("", [0, 1, 1]),
+            ("error.handled:true", [1, 1]),
+            ("!error.handled:true", [0]),
+            ("has:error.handled", [1, 1]),
+            ("has:error.handled error.handled:true", [1, 1]),
+            ("error.handled:false", [0]),
             ("has:error.handled error.handled:false", []),
         ]
 
@@ -1960,9 +1960,7 @@ class QueryIntegrationTest(SnubaTestCase, TestCase):
             )
 
             data = result["data"]
-            data = sorted(
-                data, key=lambda k: (k["error.handled"][0] is None, k["error.handled"][0])
-            )
+            data = sorted(data, key=lambda k: (k["error.handled"] is None, k["error.handled"]))
 
             assert len(data) == len(expected_data)
             assert [item["error.handled"] for item in data] == expected_data
@@ -2198,8 +2196,8 @@ class QueryIntegrationTest(SnubaTestCase, TestCase):
         event_hour = self.event_time.replace(minute=0, second=0)
         assert data[0]["timestamp.to_hour"] == iso_format(event_hour) + "+00:00"
 
-        assert len(result["meta"]) == 4
-        assert result["meta"] == {
+        assert len(result["meta"]["fields"]) == 4
+        assert result["meta"]["fields"] == {
             "project.id": "integer",
             "user": "string",
             "release": "string",
@@ -2218,8 +2216,8 @@ class QueryIntegrationTest(SnubaTestCase, TestCase):
         assert data[0]["user"] == "id:99"
         assert data[0]["user.email"] == "bruce@example.com"
 
-        assert len(result["meta"]) == 3
-        assert result["meta"] == {
+        assert len(result["meta"]["fields"]) == 3
+        assert result["meta"]["fields"] == {
             "project.id": "integer",
             "user": "string",
             "user.email": "string",
@@ -2263,8 +2261,8 @@ class QueryIntegrationTest(SnubaTestCase, TestCase):
         assert data[0]["release"] == "first-release"
         assert data[0]["project.name"] == self.project.slug
 
-        assert len(result["meta"]) == 4
-        assert result["meta"] == {
+        assert len(result["meta"]["fields"]) == 4
+        assert result["meta"]["fields"] == {
             "user.email": "string",
             "release": "string",
             "id": "string",
@@ -2794,8 +2792,8 @@ class QueryIntegrationTest(SnubaTestCase, TestCase):
         assert data[0]["user"] == "id:99"
         assert data[0]["release"] == "first-release"
 
-        assert len(result["meta"]) == 3
-        assert result["meta"] == {
+        assert len(result["meta"]["fields"]) == 3
+        assert result["meta"]["fields"] == {
             "project.id": "integer",
             "user": "string",
             "release": "string",
@@ -2958,7 +2956,7 @@ class QueryIntegrationTest(SnubaTestCase, TestCase):
             use_aggregate_conditions=True,
         )
 
-        assert results["meta"] == {
+        assert results["meta"]["fields"] == {
             "p50_measurements_lcp": "duration",
             "p50_measurements_foo": "number",
             "p50_spans_foo": "duration",

@@ -6,6 +6,7 @@ import isEqual from 'lodash/isEqual';
 import * as qs from 'query-string';
 
 import {Client} from 'sentry/api';
+import GuideAnchor from 'sentry/components/assistant/guideAnchor';
 import Button, {ButtonLabel} from 'sentry/components/button';
 import ButtonBar, {ButtonGrid} from 'sentry/components/buttonBar';
 import GroupList from 'sentry/components/issues/groupList';
@@ -180,7 +181,10 @@ class ReleaseIssues extends Component<Props, State> {
           path: `/organizations/${organization.slug}/issues/`,
           queryParams: {
             ...queryParams,
-            query: new MutableSearch([`${IssuesQuery.ALL}:${version}`]).formatString(),
+            query: new MutableSearch([
+              `${IssuesQuery.ALL}:${version}`,
+              'is:unresolved',
+            ]).formatString(),
           },
         };
       case IssuesType.RESOLVED:
@@ -198,6 +202,7 @@ class ReleaseIssues extends Component<Props, State> {
             query: new MutableSearch([
               `${IssuesQuery.ALL}:${version}`,
               IssuesQuery.UNHANDLED,
+              'is:unresolved',
             ]).formatString(),
           },
         };
@@ -217,7 +222,10 @@ class ReleaseIssues extends Component<Props, State> {
           path: `/organizations/${organization.slug}/issues/`,
           queryParams: {
             ...queryParams,
-            query: new MutableSearch([`${IssuesQuery.NEW}:${version}`]).formatString(),
+            query: new MutableSearch([
+              `${IssuesQuery.NEW}:${version}`,
+              'is:unresolved',
+            ]).formatString(),
           },
         };
     }
@@ -237,12 +245,13 @@ class ReleaseIssues extends Component<Props, State> {
       ]).then(([issueResponse, resolvedResponse]) => {
         this.setState({
           count: {
-            all: issueResponse[`${IssuesQuery.ALL}:"${version}"`] || 0,
-            new: issueResponse[`${IssuesQuery.NEW}:"${version}"`] || 0,
+            all: issueResponse[`${IssuesQuery.ALL}:"${version}" is:unresolved`] || 0,
+            new: issueResponse[`${IssuesQuery.NEW}:"${version}" is:unresolved`] || 0,
             resolved: resolvedResponse.length,
             unhandled:
-              issueResponse[`${IssuesQuery.UNHANDLED} ${IssuesQuery.ALL}:"${version}"`] ||
-              0,
+              issueResponse[
+                `${IssuesQuery.UNHANDLED} ${IssuesQuery.ALL}:"${version}" is:unresolved`
+              ] || 0,
             regressed: issueResponse[`${IssuesQuery.REGRESSED}:"${version}"`] || 0,
           },
         });
@@ -257,9 +266,9 @@ class ReleaseIssues extends Component<Props, State> {
     const issuesCountPath = `/organizations/${organization.slug}/issues-count/`;
 
     const params = [
-      `${IssuesQuery.NEW}:"${version}"`,
-      `${IssuesQuery.ALL}:"${version}"`,
-      `${IssuesQuery.UNHANDLED} ${IssuesQuery.ALL}:"${version}"`,
+      `${IssuesQuery.NEW}:"${version}" is:unresolved`,
+      `${IssuesQuery.ALL}:"${version}" is:unresolved`,
+      `${IssuesQuery.UNHANDLED} ${IssuesQuery.ALL}:"${version}" is:unresolved`,
       `${IssuesQuery.REGRESSED}:"${version}"`,
     ];
     const queryParams = params.map(param => param);
@@ -383,27 +392,33 @@ class ReleaseIssues extends Component<Props, State> {
     return (
       <Fragment>
         <ControlsWrapper>
-          <StyledButtonBar active={issuesType} merged>
-            {issuesTypes.map(({value, label, issueCount}) => (
-              <Button
-                key={value}
-                barId={value}
-                size="xsmall"
-                onClick={() => this.handleIssuesTypeSelection(value)}
-                data-test-id={`filter-${value}`}
-              >
-                {label}
-                <QueryCount count={issueCount} max={99} hideParens hideIfEmpty={false} />
-              </Button>
-            ))}
-          </StyledButtonBar>
+          <GuideAnchor target="release_states">
+            <StyledButtonBar active={issuesType} merged>
+              {issuesTypes.map(({value, label, issueCount}) => (
+                <Button
+                  key={value}
+                  barId={value}
+                  size="xs"
+                  onClick={() => this.handleIssuesTypeSelection(value)}
+                >
+                  {label}
+                  <QueryCount
+                    count={issueCount}
+                    max={99}
+                    hideParens
+                    hideIfEmpty={false}
+                  />
+                </Button>
+              ))}
+            </StyledButtonBar>
+          </GuideAnchor>
 
           <OpenInButtonBar gap={1}>
-            <Button to={this.getIssuesUrl()} size="xsmall" data-test-id="issues-button">
+            <Button to={this.getIssuesUrl()} size="xs">
               {t('Open in Issues')}
             </Button>
 
-            <StyledPagination pageLinks={pageLinks} onCursor={onCursor} size="xsmall" />
+            <StyledPagination pageLinks={pageLinks} onCursor={onCursor} size="xs" />
           </OpenInButtonBar>
         </ControlsWrapper>
         <div data-test-id="release-wrapper">
@@ -419,6 +434,7 @@ class ReleaseIssues extends Component<Props, State> {
             renderEmptyMessage={this.renderEmptyMessage}
             withPagination={false}
             onFetchSuccess={this.handleFetchSuccess}
+            source="release"
           />
         </div>
       </Fragment>

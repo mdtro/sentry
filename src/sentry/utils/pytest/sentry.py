@@ -3,10 +3,12 @@ from __future__ import annotations
 import collections
 import os
 import random
+from datetime import datetime
 from hashlib import md5
 from typing import TypeVar
 from unittest import mock
 
+import freezegun
 import pytest
 from django.conf import settings
 from sentry_sdk import Hub
@@ -19,6 +21,8 @@ V = TypeVar("V")
 TEST_ROOT = os.path.normpath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir, os.pardir, "tests")
 )
+
+TEST_REDIS_DB = 9
 
 
 def pytest_configure(config):
@@ -101,7 +105,7 @@ def pytest_configure(config):
 
     settings.SENTRY_ALLOW_ORIGIN = "*"
 
-    settings.SENTRY_TSDB = "sentry.tsdb.inmemory.InMemoryTSDB"
+    settings.SENTRY_TSDB = "sentry.tsdb.redissnuba.RedisSnubaTSDB"
     settings.SENTRY_TSDB_OPTIONS = {}
 
     settings.SENTRY_NEWSLETTER = "sentry.newsletter.dummy.DummyNewsletter"
@@ -110,10 +114,16 @@ def pytest_configure(config):
     settings.BROKER_BACKEND = "memory"
     settings.BROKER_URL = "memory://"
     settings.CELERY_ALWAYS_EAGER = False
+    settings.CELERY_COMPLAIN_ABOUT_BAD_USE_OF_PICKLE = True
+    settings.PICKLED_OBJECT_FIELD_COMPLAIN_ABOUT_BAD_USE_OF_PICKLE = True
     settings.CELERY_EAGER_PROPAGATES_EXCEPTIONS = True
 
     settings.DEBUG_VIEWS = True
     settings.SERVE_UPLOADED_FILES = True
+
+    # Disable internal error collection during tests.
+    settings.SENTRY_PROJECT = None
+    settings.SENTRY_PROJECT_KEY = None
 
     settings.SENTRY_ENCRYPTION_SCHEMES = ()
 
@@ -125,22 +135,19 @@ def pytest_configure(config):
     settings.SENTRY_RATELIMITER = "sentry.ratelimits.redis.RedisRateLimiter"
     settings.SENTRY_RATELIMITER_OPTIONS = {}
 
-    if os.environ.get("USE_SNUBA", False):
-        settings.SENTRY_SEARCH = "sentry.search.snuba.EventsDatasetSnubaSearchBackend"
-        settings.SENTRY_TSDB = "sentry.tsdb.redissnuba.RedisSnubaTSDB"
-        settings.SENTRY_EVENTSTREAM = "sentry.eventstream.snuba.SnubaEventStream"
-
-    if os.environ.get("DISABLE_TEST_SDK", False):
-        settings.SENTRY_SDK_CONFIG = {}
-
     if not hasattr(settings, "SENTRY_OPTIONS"):
         settings.SENTRY_OPTIONS = {}
 
     settings.SENTRY_OPTIONS.update(
         {
-            "redis.clusters": {"default": {"hosts": {0: {"db": 9}}}},
+            "redis.clusters": {"default": {"hosts": {0: {"db": TEST_REDIS_DB}}}},
             "mail.backend": "django.core.mail.backends.locmem.EmailBackend",
             "system.url-prefix": "http://testserver",
+            "system.base-hostname": "testserver",
+            "system.organization-base-hostname": "{slug}.testserver",
+            "system.organization-url-template": "http://{hostname}",
+            "system.region-api-url-template": "http://{region}.testserver",
+            "system.region": "us",
             "system.secret-key": "a" * 52,
             "slack.client-id": "slack-client-id",
             "slack.client-secret": "slack-client-secret",
@@ -169,6 +176,10 @@ def pytest_configure(config):
     )
 
     settings.VALIDATE_SUPERUSER_ACCESS_CATEGORY_AND_REASON = False
+    settings.SENTRY_USE_BIG_INTS = True
+    settings.SENTRY_USE_SNOWFLAKE = True
+
+    settings.SENTRY_SNOWFLAKE_EPOCH_START = datetime(1999, 12, 31, 0, 0).timestamp()
 
     # Plugin-related settings
     settings.ASANA_CLIENT_ID = "abc"
@@ -182,6 +193,14 @@ def pytest_configure(config):
 
     # This is so tests can assume this feature is off by default
     settings.SENTRY_FEATURES["organizations:performance-view"] = False
+
+    # Enables performance problem detection
+    settings.SENTRY_OPTIONS["performance.issues.all.problem-creation"] = 1.0
+    # Enables performance issue detection and creation
+    settings.SENTRY_FEATURES["organizations:performance-issues-ingest"] = True
+
+    # If a request hits the wrong silo, replace the 404 response with an error state
+    settings.FAIL_ON_UNAVAILABLE_API_CALL = True
 
     # django mail uses socket.getfqdn which doesn't play nice if our
     # networking isn't stable
@@ -200,6 +219,7 @@ def pytest_configure(config):
     from sentry.runner.initializer import initialize_app
 
     initialize_app({"settings": settings, "options": None})
+    Hub.main.bind_client(None)
     register_extensions()
 
     from sentry.utils.redis import clusters
@@ -213,6 +233,8 @@ def pytest_configure(config):
     from sentry.celery import app  # NOQA
 
     http.DISALLOWED_IPS = set()
+
+    freezegun.configure(extend_ignore_list=["sentry.utils.retries"])
 
 
 def register_extensions():
@@ -247,12 +269,6 @@ def register_extensions():
 
 
 def pytest_runtest_teardown(item):
-    if not os.environ.get("USE_SNUBA", False):
-        from sentry import tsdb
-
-        # TODO(dcramer): this only works if this is the correct tsdb backend
-        tsdb.flush()
-
     # XXX(dcramer): only works with DummyNewsletter
     from sentry import newsletter
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import TYPE_CHECKING, Iterable, Mapping, MutableMapping, MutableSet, Sequence
+from typing import TYPE_CHECKING, Iterable, Mapping, MutableMapping, MutableSet, Sequence, Union
 
 from django.db import transaction
 from django.db.models import Q, QuerySet
@@ -28,6 +28,7 @@ from sentry.utils.sdk import configure_scope
 
 if TYPE_CHECKING:
     from sentry.models import NotificationSetting, Organization, Project, Team, User
+    from sentry.services.hybrid_cloud.user import APIUser
 
 REMOVE_SETTING_BATCH_SIZE = 1000
 
@@ -247,9 +248,9 @@ class NotificationsManager(BaseManager["NotificationSetting"]):
         self,
         type_: NotificationSettingTypes,
         parent: Organization | Project,
-        recipients: Iterable[Team | User],
+        recipients: Iterable[Team | User | APIUser],
     ) -> QuerySet:
-        from sentry.models import Team, User
+        from sentry.models import Team
 
         """
         Find all of a project/organization's notification settings for a list of
@@ -262,9 +263,9 @@ class NotificationsManager(BaseManager["NotificationSetting"]):
         for recipient in recipients:
             if type(recipient) == Team:
                 team_ids.add(recipient.id)
-            if type(recipient) == User:
+            if recipient.class_name() == "User":
                 user_ids.add(recipient.id)
-            actor_ids.add(recipient.actor.id)
+            actor_ids.add(recipient.actor_id)
 
         # If the list would be empty, don't bother querying.
         if not actor_ids:
@@ -290,10 +291,10 @@ class NotificationsManager(BaseManager["NotificationSetting"]):
 
     def filter_to_accepting_recipients(
         self,
-        parent: Project,
-        recipients: Iterable[Team | User],
+        parent: Union[Organization, Project],
+        recipients: Iterable[Team | APIUser],
         type: NotificationSettingTypes = NotificationSettingTypes.ISSUE_ALERTS,
-    ) -> Mapping[ExternalProviders, Iterable[Team | User]]:
+    ) -> Mapping[ExternalProviders, Iterable[Team | APIUser]]:
         """
         Filters a list of teams or users down to the recipients by provider who
         are subscribed to alerts. We check both the project level settings and
@@ -303,6 +304,7 @@ class NotificationsManager(BaseManager["NotificationSetting"]):
         notification_settings_by_recipient = transform_to_notification_settings_by_recipient(
             notification_settings, recipients
         )
+
         mapping = defaultdict(set)
         for recipient in recipients:
             providers = where_should_recipient_be_notified(

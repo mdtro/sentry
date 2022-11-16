@@ -8,6 +8,7 @@ import Button from 'sentry/components/button';
 import ButtonBar from 'sentry/components/buttonBar';
 import NotFound from 'sentry/components/errors/notFound';
 import EventOrGroupTitle from 'sentry/components/eventOrGroupTitle';
+import EventCustomPerformanceMetrics from 'sentry/components/events/eventCustomPerformanceMetrics';
 import {BorderlessEventEntries} from 'sentry/components/events/eventEntries';
 import EventMessage from 'sentry/components/events/eventMessage';
 import EventVitals from 'sentry/components/events/eventVitals';
@@ -16,8 +17,9 @@ import FileSize from 'sentry/components/fileSize';
 import * as Layout from 'sentry/components/layouts/thirds';
 import LoadingError from 'sentry/components/loadingError';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
+import {TransactionToProfileButton} from 'sentry/components/profiling/transactionToProfileButton';
 import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
-import TagsTable from 'sentry/components/tagsTable';
+import {TagsTable} from 'sentry/components/tagsTable';
 import {IconOpen} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
@@ -29,7 +31,7 @@ import EventView from 'sentry/utils/discover/eventView';
 import {formatTagKey} from 'sentry/utils/discover/fields';
 import {eventDetailsRoute} from 'sentry/utils/discover/urls';
 import {getMessage} from 'sentry/utils/events';
-import * as QuickTraceContext from 'sentry/utils/performance/quickTrace/quickTraceContext';
+import {QuickTraceContext} from 'sentry/utils/performance/quickTrace/quickTraceContext';
 import QuickTraceQuery from 'sentry/utils/performance/quickTrace/quickTraceQuery';
 import TraceMetaQuery, {
   TraceMetaQueryChildrenProps,
@@ -52,6 +54,7 @@ type Props = Pick<
   eventSlug: string;
   eventView: EventView;
   organization: Organization;
+  isHomepage?: boolean;
 };
 
 type State = {
@@ -97,7 +100,7 @@ class EventDetailsContent extends AsyncComponent<Props, State> {
   }
 
   generateTagUrl = (tag: EventTag) => {
-    const {eventView, organization} = this.props;
+    const {eventView, organization, isHomepage} = this.props;
     const {event} = this.state;
     if (!event) {
       return '';
@@ -108,7 +111,7 @@ class EventDetailsContent extends AsyncComponent<Props, State> {
     }
     const tagKey = formatTagKey(tag.key);
     const nextView = getExpandedResults(eventView, {[tagKey]: tag.value}, eventReference);
-    return nextView.getResultsViewUrlTarget(organization.slug);
+    return nextView.getResultsViewUrlTarget(organization.slug, isHomepage);
   };
 
   renderBody() {
@@ -122,7 +125,7 @@ class EventDetailsContent extends AsyncComponent<Props, State> {
   }
 
   renderContent(event: Event) {
-    const {organization, location, eventView, route, router} = this.props;
+    const {organization, location, eventView, route, router, isHomepage} = this.props;
     const {isSidebarVisible} = this.state;
 
     // metrics
@@ -146,6 +149,8 @@ class EventDetailsContent extends AsyncComponent<Props, State> {
 
     const eventJsonUrl = `/api/0/projects/${organization.slug}/${this.projectId}/events/${event.eventID}/json/`;
 
+    const hasProfilingFeature = organization.features.includes('profiling');
+
     const renderContent = (
       results?: QuickTraceQueryChildrenProps,
       metaResults?: TraceMetaQueryChildrenProps
@@ -158,15 +163,17 @@ class EventDetailsContent extends AsyncComponent<Props, State> {
               event={event}
               organization={organization}
               location={location}
+              isHomepage={isHomepage}
             />
             <EventHeader event={event} />
           </Layout.HeaderContent>
           <Layout.HeaderActions>
             <ButtonBar gap={1}>
-              <Button onClick={this.toggleSidebar}>
+              <Button size="sm" onClick={this.toggleSidebar}>
                 {isSidebarVisible ? 'Hide Details' : 'Show Details'}
               </Button>
               <Button
+                size="sm"
                 icon={<IconOpen />}
                 href={eventJsonUrl}
                 external
@@ -181,10 +188,18 @@ class EventDetailsContent extends AsyncComponent<Props, State> {
               >
                 {t('JSON')} (<FileSize bytes={event.size} />)
               </Button>
+              {hasProfilingFeature && event.type === 'transaction' && (
+                <TransactionToProfileButton
+                  orgId={organization.slug}
+                  projectId={this.projectId}
+                  transactionId={event.eventID}
+                />
+              )}
               {transactionSummaryTarget && (
                 <Feature organization={organization} features={['performance-view']}>
                   {({hasFeature}) => (
                     <Button
+                      size="sm"
                       disabled={!hasFeature}
                       priority="primary"
                       to={transactionSummaryTarget}
@@ -235,12 +250,10 @@ class EventDetailsContent extends AsyncComponent<Props, State> {
                         event={event}
                         project={projects[0] as Project}
                         location={location}
-                        showExampleCommit={false}
                         showTagSummary={false}
                         api={this.api}
                         router={router}
                         route={route}
-                        isBorderless
                       />
                     </QuickTraceContext.Provider>
                   </SpanEntryContext.Provider>
@@ -253,6 +266,15 @@ class EventDetailsContent extends AsyncComponent<Props, State> {
           {isSidebarVisible && (
             <Layout.Side>
               <EventVitals event={event} />
+              {(organization.features.includes('dashboards-mep') ||
+                organization.features.includes('mep-rollout-flag')) && (
+                <EventCustomPerformanceMetrics
+                  event={event}
+                  location={location}
+                  organization={organization}
+                  isHomepage={isHomepage}
+                />
+              )}
               {event.groupID && (
                 <LinkedIssue groupId={event.groupID} eventId={event.eventID} />
               )}
@@ -352,7 +374,7 @@ const EventHeader = ({event}: {event: Event}) => {
   return (
     <EventHeaderContainer data-test-id="event-header">
       <TitleWrapper>
-        <EventOrGroupTitle data={event} />
+        <StyledEventOrGroupTitle data={event} />
       </TitleWrapper>
       {message && (
         <MessageWrapper>
@@ -368,8 +390,11 @@ const EventHeaderContainer = styled('div')`
 `;
 
 const TitleWrapper = styled('div')`
-  font-size: ${p => p.theme.headerFontSize};
   margin-top: 20px;
+`;
+
+const StyledEventOrGroupTitle = styled(EventOrGroupTitle)`
+  font-size: ${p => p.theme.headerFontSize};
 `;
 
 const MessageWrapper = styled('div')`

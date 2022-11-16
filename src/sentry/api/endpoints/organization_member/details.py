@@ -7,6 +7,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import audit_log, features, ratelimits, roles
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases import OrganizationMemberEndpoint
 from sentry.api.bases.organization import OrganizationPermission
 from sentry.api.serializers import serialize
@@ -35,7 +36,7 @@ from sentry.models import (
 from sentry.roles import organization_roles, team_roles
 from sentry.utils import metrics
 
-from . import get_allowed_roles
+from . import get_allowed_org_roles
 
 ERR_NO_AUTH = "You cannot remove this member with an unauthenticated API request."
 ERR_INSUFFICIENT_ROLE = "You cannot remove a member who has more access than you."
@@ -78,6 +79,7 @@ class RelaxedMemberPermission(OrganizationPermission):
 
 
 @extend_schema(tags=["Organizations"])
+@region_silo_endpoint
 class OrganizationMemberDetailsEndpoint(OrganizationMemberEndpoint):
     permission_classes = [RelaxedMemberPermission]
     public = {"GET", "DELETE"}
@@ -120,7 +122,7 @@ class OrganizationMemberDetailsEndpoint(OrganizationMemberEndpoint):
 
         Will return a pending invite as long as it's already approved.
         """
-        allowed_roles = get_allowed_roles(request, organization, member)
+        allowed_roles = get_allowed_org_roles(request, organization, member)
         return Response(
             serialize(
                 member,
@@ -160,7 +162,7 @@ class OrganizationMemberDetailsEndpoint(OrganizationMemberEndpoint):
         except AuthProvider.DoesNotExist:
             auth_provider = None
 
-        allowed_roles = get_allowed_roles(request, organization)
+        allowed_roles = get_allowed_org_roles(request, organization)
         result = serializer.validated_data
 
         # XXX(dcramer): if/when this expands beyond reinvite we need to check
@@ -216,8 +218,8 @@ class OrganizationMemberDetailsEndpoint(OrganizationMemberEndpoint):
                 )
 
         assigned_role = result.get("role")
-        if assigned_role:
-            allowed_roles = get_allowed_roles(request, organization)
+        if assigned_role and (assigned_role != member.role):
+            allowed_roles = get_allowed_org_roles(request, organization)
             allowed_role_ids = {r.id for r in allowed_roles}
 
             # A user cannot promote others above themselves
@@ -233,7 +235,7 @@ class OrganizationMemberDetailsEndpoint(OrganizationMemberEndpoint):
                     status=403,
                 )
 
-            if member.user == request.user and (assigned_role != member.role):
+            if member.user == request.user:
                 return Response({"detail": "You cannot make changes to your own role."}, status=400)
 
             if (

@@ -3,6 +3,7 @@ import {t} from 'sentry/locale';
 export const ALL_PROVIDERS = {
   email: 'default',
   slack: 'never',
+  msteams: 'never',
 };
 export const ALL_PROVIDER_NAMES = Object.keys(ALL_PROVIDERS);
 
@@ -28,18 +29,35 @@ export type NotificationSettingsObject = {
 
 export const NOTIFICATION_SETTINGS_TYPES = [
   'alerts',
+  'activeRelease',
   'workflow',
   'deploy',
   'approval',
   'quota',
   'reports',
   'email',
-];
+  'spikeProtection',
+] as const;
 
 export const SELF_NOTIFICATION_SETTINGS_TYPES = [
   'personalActivityNotifications',
   'selfAssignOnResolve',
 ];
+
+// 'alerts' | 'activeRelease' | 'workflow' ...
+export type NotificationSettingsType = typeof NOTIFICATION_SETTINGS_TYPES[number];
+
+export const NOTIFICATION_SETTINGS_PATHNAMES: Record<NotificationSettingsType, string> = {
+  alerts: 'alerts',
+  activeRelease: 'activeRelease',
+  workflow: 'workflow',
+  deploy: 'deploy',
+  approval: 'approval',
+  quota: 'quota',
+  reports: 'reports',
+  email: 'email',
+  spikeProtection: 'spike-protection',
+};
 
 export const CONFIRMATION_MESSAGE = (
   <div>
@@ -53,3 +71,10 @@ export const CONFIRMATION_MESSAGE = (
     </p>
   </div>
 );
+
+export const NOTIFICATION_FEATURE_MAP: Partial<Record<NotificationSettingsType, string>> =
+  {
+    quota: 'slack-overage-notifications',
+    activeRelease: 'active-release-monitor-alpha',
+    spikeProtection: 'spike-projections',
+  };

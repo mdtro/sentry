@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import abc
 import itertools
 import logging
 import time
@@ -10,10 +11,13 @@ from random import Random
 from typing import Any, MutableMapping
 
 import pytz
+from django.shortcuts import redirect
 from django.template.defaultfilters import slugify
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.decorators import method_decorator
 from django.utils.safestring import mark_safe
+from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import View
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -42,16 +46,50 @@ from sentry.notifications.notifications.activity import EMAIL_CLASSES_BY_TYPE
 from sentry.notifications.notifications.base import BaseNotification
 from sentry.notifications.notifications.digest import DigestNotification
 from sentry.notifications.types import GroupSubscriptionReason
-from sentry.notifications.utils import get_group_settings_link, get_rules
-from sentry.utils import loremipsum
+from sentry.notifications.utils import get_group_settings_link, get_interface_list, get_rules
+from sentry.utils import json, loremipsum
 from sentry.utils.dates import to_datetime, to_timestamp
-from sentry.utils.email import inline_css
+from sentry.utils.email import MessageBuilder, inline_css
 from sentry.utils.http import absolute_uri
 from sentry.utils.samples import load_data
 from sentry.web.decorators import login_required
 from sentry.web.helpers import render_to_response, render_to_string
 
 logger = logging.getLogger(__name__)
+
+# TODO(dcramer): change to use serializer
+COMMIT_EXAMPLE = """[
+{
+    "repository": {
+        "status": "active",
+        "name": "Example Repo",
+        "url": "https://github.com/example/example",
+        "dateCreated": "2018-02-28T23:39:22.402Z",
+        "provider": {"id": "github", "name": "GitHub"},
+        "id": "1"
+    },
+    "score": "2",
+    "subject": "feat: Do something to raven/base.py",
+    "message": "feat: Do something to raven/base.py\\naptent vivamus vehicula tempus volutpat hac tortor",
+    "id": "1b17483ffc4a10609e7921ee21a8567bfe0ed006",
+    "shortId": "1b17483",
+    "author": {
+        "username": "dcramer@gmail.com",
+        "isManaged": false,
+        "lastActive": "2018-03-01T18:25:28.149Z",
+        "id": "1",
+        "isActive": true,
+        "has2fa": false,
+        "name": "dcramer@gmail.com",
+        "avatarUrl": "https://secure.gravatar.com/avatar/51567a4f786cd8a2c41c513b592de9f9?s=32&d=mm",
+        "dateJoined": "2018-02-27T22:04:32.847Z",
+        "emails": [{"is_verified": false, "id": "1", "email": "dcramer@gmail.com"}],
+        "avatar": {"avatarUuid": "", "avatarType": "letter_avatar"},
+        "lastLogin": "2018-02-27T22:04:32.847Z",
+        "email": "dcramer@gmail.com"
+    }
+}
+]"""
 
 
 def get_random(request):
@@ -96,6 +134,7 @@ def make_group_generator(random, project):
     for id in itertools.count(1):
         first_seen = epoch + random.randint(0, 60 * 60 * 24 * 30)
         last_seen = random.randint(first_seen, first_seen + (60 * 60 * 24 * 30))
+        times_seen = 98765
 
         culprit = make_culprit(random)
         level = random.choice(list(LOG_LEVELS.keys()))
@@ -110,6 +149,7 @@ def make_group_generator(random, project):
             message=message,
             first_seen=to_datetime(first_seen),
             last_seen=to_datetime(last_seen),
+            times_seen=times_seen,
             status=random.choice((GroupStatus.UNRESOLVED, GroupStatus.RESOLVED)),
             data={"type": "default", "metadata": {"title": message}},
         )
@@ -151,6 +191,46 @@ class MailPreview:
             "sentry/debug/mail/preview.html",
             context={"preview": self, "format": request.GET.get("format")},
         )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class MailPreviewView(View, abc.ABC):
+    @abc.abstractmethod
+    def get_context(self, request):
+        pass
+
+    def get_subject(self, request):
+        return None
+
+    @property
+    @abc.abstractmethod
+    def html_template(self):
+        pass
+
+    @property
+    @abc.abstractmethod
+    def text_template(self):
+        pass
+
+    def get(self, request):
+        return MailPreview(
+            text_template=self.text_template,
+            html_template=self.html_template,
+            context=self.get_context(request),
+            subject=self.get_subject(request),
+        ).render(request)
+
+    def post(self, request):
+        msg = MessageBuilder(
+            subject=self.get_subject(request),
+            template=self.text_template,
+            html_template=self.html_template,
+            type="email.debug",
+            context=self.get_context(request),
+        )
+        msg.send_async(to=["dummy@stuff.com"])
+
+        return redirect(request.path)
 
 
 class MailPreviewAdapter(MailPreview):
@@ -266,16 +346,7 @@ def alert(request):
     group.data = {"type": event_type.key, "metadata": event_type.get_metadata(data)}
 
     rule = Rule(id=1, label="An example rule")
-
-    # XXX: this interface_list code needs to be the same as in
-    #      src/sentry/mail/adapter.py
-    interface_list = []
-    for interface in event.interfaces.values():
-        body = interface.to_email_html(event)
-        if not body:
-            continue
-        text_body = interface.to_string(event)
-        interface_list.append((interface.get_title(), mark_safe(body), text_body))
+    interface_list = get_interface_list(event)
 
     return MailPreview(
         html_template="sentry/emails/error.html",
@@ -292,39 +363,85 @@ def alert(request):
             "interfaces": interface_list,
             "tags": event.tags,
             "project_label": project.slug,
-            "commits": [
-                {
-                    # TODO(dcramer): change to use serializer
-                    "repository": {
-                        "status": "active",
-                        "name": "Example Repo",
-                        "url": "https://github.com/example/example",
-                        "dateCreated": "2018-02-28T23:39:22.402Z",
-                        "provider": {"id": "github", "name": "GitHub"},
-                        "id": "1",
-                    },
-                    "score": 2,
-                    "subject": "feat: Do something to raven/base.py",
-                    "message": "feat: Do something to raven/base.py\naptent vivamus vehicula tempus volutpat hac tortor",
-                    "id": "1b17483ffc4a10609e7921ee21a8567bfe0ed006",
-                    "shortId": "1b17483",
-                    "author": {
-                        "username": "dcramer@gmail.com",
-                        "isManaged": False,
-                        "lastActive": "2018-03-01T18:25:28.149Z",
-                        "id": "1",
-                        "isActive": True,
-                        "has2fa": False,
-                        "name": "dcramer@gmail.com",
-                        "avatarUrl": "https://secure.gravatar.com/avatar/51567a4f786cd8a2c41c513b592de9f9?s=32&d=mm",
-                        "dateJoined": "2018-02-27T22:04:32.847Z",
-                        "emails": [{"is_verified": False, "id": "1", "email": "dcramer@gmail.com"}],
-                        "avatar": {"avatarUuid": None, "avatarType": "letter_avatar"},
-                        "lastLogin": "2018-02-27T22:04:32.847Z",
-                        "email": "dcramer@gmail.com",
-                    },
-                }
-            ],
+            "commits": json.loads(COMMIT_EXAMPLE),
+        },
+    ).render(request)
+
+
+@login_required
+def release_alert(request):
+    platform = request.GET.get("platform", "python")
+    org = Organization(id=1, slug="example", name="Example")
+    project = Project(id=1, slug="example", name="Example", organization=org, platform="python")
+
+    random = get_random(request)
+    group = next(make_group_generator(random, project))
+
+    data = dict(load_data(platform))
+    data["message"] = group.message
+    data["event_id"] = "44f1419e73884cd2b45c79918f4b6dc4"
+    data.pop("logentry", None)
+    data["environment"] = "prod"
+    data["tags"] = [
+        ("logger", "javascript"),
+        ("environment", "prod"),
+        ("level", "error"),
+        ("device", "Other"),
+    ]
+
+    event_manager = EventManager(data)
+    event_manager.normalize()
+    data = event_manager.get_data()
+    event = event_manager.save(project.id)
+    # Prevent CI screenshot from constantly changing
+    event.data["timestamp"] = 1504656000.0  # datetime(2017, 9, 6, 0, 0)
+    event_type = get_event_type(event.data)
+    # In non-debug context users_seen we get users_seen from group.count_users_seen()
+    users_seen = random.randint(0, 100 * 1000)
+
+    group.message = event.search_message
+    group.data = {"type": event_type.key, "metadata": event_type.get_metadata(data)}
+
+    rule = Rule(id=1, label="An example rule")
+
+    # XXX: this interface_list code needs to be the same as in
+    #      src/sentry/mail/adapter.py
+    interfaces = {}
+    for interface in event.interfaces.values():
+        body = interface.to_email_html(event)
+        if not body:
+            continue
+        text_body = interface.to_string(event)
+        interfaces[interface.get_title()] = {
+            "label": interface.get_title(),
+            "html": mark_safe(body),
+            "body": text_body,
+        }
+
+    contexts = event.data["contexts"].items() if "contexts" in event.data else None
+    event_user = event.data["event_user"] if "event_user" in event.data else None
+
+    return MailPreview(
+        html_template="sentry/emails/release_alert.html",
+        text_template="sentry/emails/release_alert.txt",
+        context={
+            "rules": get_rules([rule], org, project),
+            "group": group,
+            "event": event,
+            "event_user": event_user,
+            "timezone": pytz.timezone("Europe/Vienna"),
+            "link": get_group_settings_link(group, None, get_rules([rule], org, project), 1337),
+            "interfaces": interfaces,
+            "tags": event.tags,
+            "contexts": contexts,
+            "users_seen": users_seen,
+            "project": project,
+            "last_release": {
+                "version": "13.9.2",
+            },
+            "last_release_link": f"http://testserver/organizations/{org.slug}/releases/13.9.2/?project={project.id}",
+            "environment": "production",
+            "regression": False,
         },
     ).render(request)
 
@@ -665,8 +782,9 @@ def org_delete_confirm(request):
 def render_preview_email_for_notification(
     notification: BaseNotification, recipient: User | Team
 ) -> MutableMapping[str, Any]:
+    shared_context = notification.get_context()
+    basic_args = get_builder_args(notification, recipient, shared_context)
     # remove unneeded fields
-    basic_args = get_builder_args(notification, recipient)
     args = {k: v for k, v in basic_args.items() if k not in ["headers", "reference", "subject"]}
     # convert subject back to a string
     args["subject"] = basic_args["subject"].decode("utf-8")

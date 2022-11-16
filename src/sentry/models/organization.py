@@ -14,21 +14,32 @@ from django.utils.functional import cached_property
 
 from bitfield import BitField
 from sentry import features, roles
-from sentry.app import locks
 from sentry.constants import (
     ALERTS_MEMBER_WRITE_DEFAULT,
     EVENTS_MEMBER_ADMIN_DEFAULT,
     RESERVED_ORGANIZATION_SLUGS,
     RESERVED_PROJECT_SLUGS,
 )
-from sentry.db.models import BaseManager, BoundedPositiveIntegerField, Model, sane_repr
+from sentry.db.models import (
+    BaseManager,
+    BoundedPositiveIntegerField,
+    Model,
+    region_silo_only_model,
+    sane_repr,
+)
 from sentry.db.models.utils import slugify_instance
+from sentry.locks import locks
+from sentry.models.organizationmember import OrganizationMember
 from sentry.roles.manager import Role
 from sentry.utils.http import absolute_uri
 from sentry.utils.retries import TimedRetryPolicy
+from sentry.utils.snowflake import SnowflakeIdMixin
 
 if TYPE_CHECKING:
-    from sentry.models import User
+    from sentry.services.hybrid_cloud.user import APIUser
+
+
+SENTRY_USE_SNOWFLAKE = getattr(settings, "SENTRY_USE_SNOWFLAKE", False)
 
 
 class OrganizationStatus(IntEnum):
@@ -36,7 +47,7 @@ class OrganizationStatus(IntEnum):
     PENDING_DELETION = 1
     DELETION_IN_PROGRESS = 2
 
-    # alias
+    # alias for OrganizationStatus.ACTIVE
     VISIBLE = 0
 
     def __str__(self):
@@ -110,7 +121,8 @@ class OrganizationManager(BaseManager):
         return [r.organization for r in results]
 
 
-class Organization(Model):
+@region_silo_only_model
+class Organization(Model, SnowflakeIdMixin):
     """
     An organization represents a group of individuals which maintain ownership of projects.
     """
@@ -186,11 +198,22 @@ class Organization(Model):
         return f"{self.name} ({self.slug})"
 
     def save(self, *args, **kwargs):
+        slugify_target = None
         if not self.slug:
-            lock = locks.get("slug:organization", duration=5)
+            slugify_target = self.name
+        elif not self.id:
+            slugify_target = self.slug
+        if slugify_target is not None:
+            lock = locks.get("slug:organization", duration=5, name="organization_slug")
             with TimedRetryPolicy(10)(lock.acquire):
-                slugify_instance(self, self.name, reserved=RESERVED_ORGANIZATION_SLUGS)
-            super().save(*args, **kwargs)
+                slugify_target = slugify_target.replace("_", "-").strip("-")
+                slugify_instance(self, slugify_target, reserved=RESERVED_ORGANIZATION_SLUGS)
+
+        if SENTRY_USE_SNOWFLAKE:
+            snowflake_redis_key = "organization_snowflake_key"
+            self.save_with_snowflake_id(
+                snowflake_redis_key, lambda: super(Organization, self).save(*args, **kwargs)
+            )
         else:
             super().save(*args, **kwargs)
 
@@ -229,19 +252,31 @@ class Organization(Model):
             "default_role": self.default_role,
         }
 
-    def get_owners(self) -> Sequence[User]:
-        from sentry.models import User
+    def get_owners(self) -> Sequence[APIUser]:
+        from sentry.services.hybrid_cloud.user import user_service
 
-        return User.objects.filter(
-            sentry_orgmember_set__role=roles.get_top_dog().id,
-            sentry_orgmember_set__organization=self,
-            is_active=True,
-        )
+        owner_memberships = OrganizationMember.objects.filter(
+            role=roles.get_top_dog().id, organization=self
+        ).values_list("user_id", flat=True)
+        return user_service.get_many(owner_memberships)
 
-    def get_default_owner(self):
+    def get_default_owner(self) -> APIUser:
         if not hasattr(self, "_default_owner"):
             self._default_owner = self.get_owners()[0]
         return self._default_owner
+
+    @property
+    def default_owner_id(self):
+        """
+        Similar to get_default_owner but won't raise a key error
+        if there is no owner. Used for analytics primarily.
+        """
+        if not hasattr(self, "_default_owner_id"):
+            owners = self.get_owners()
+            if len(owners) == 0:
+                return None
+            self._default_owner_id = owners[0].id
+        return self._default_owner_id
 
     def has_single_owner(self):
         from sentry.models import OrganizationMember
@@ -480,11 +515,13 @@ class Organization(Model):
                 request, remove_email_verification_non_compliant_members
             )
 
-    def get_url_viewname(self):
+    @staticmethod
+    def get_url_viewname():
         return "sentry-organization-issue-list"
 
-    def get_url(self):
-        return reverse(self.get_url_viewname(), args=[self.slug])
+    @staticmethod
+    def get_url(slug: str) -> str:
+        return reverse(Organization.get_url_viewname(), args=[slug])
 
     def get_scopes(self, role: Role) -> FrozenSet[str]:
         if role.priority > 0:

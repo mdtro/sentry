@@ -15,6 +15,7 @@ from datetime import datetime
 import pytest
 import requests
 import yaml
+from django.core.cache import cache
 
 import sentry
 
@@ -160,6 +161,14 @@ def task_runner():
 
 @pytest.fixture
 def burst_task_runner():
+    """Context manager that queues up Celery tasks until called.
+
+    The yielded value which can be assigned by the ``as`` clause is callable and will
+    execute all queued up tasks. It takes a ``max_jobs`` argument to limit the number of
+    jobs to process.
+
+    The queue itself can be inspected via the ``queue`` attribute of the yielded value.
+    """
     from sentry.testutils.helpers.task_runner import BurstTaskRunner
 
     return BurstTaskRunner
@@ -256,12 +265,13 @@ def default_activity(default_group, default_project, default_user):
 @pytest.fixture()
 def dyn_sampling_data():
     # return a function that returns fresh config so we don't accidentally get tests interfering with each other
-    def inner():
+    def inner(active=True):
         return {
             "rules": [
                 {
                     "sampleRate": 0.7,
                     "type": "trace",
+                    "active": active,
                     "condition": {
                         "op": "and",
                         "inner": [
@@ -405,9 +415,37 @@ def reset_snuba(call_snuba):
         "/tests/transactions/drop",
         "/tests/sessions/drop",
         "/tests/metrics/drop",
+        "/tests/generic_metrics/drop",
     ]
 
     assert all(
         response.status_code == 200
         for response in ThreadPoolExecutor(4).map(call_snuba, init_endpoints)
     )
+
+
+@pytest.fixture
+def set_sentry_option(request):
+    """
+    A pytest-style wrapper around override_options.
+
+    ```python
+    def test_basic(set_sentry_option):
+        set_sentry_option("key", 1.0)
+    ```
+    """
+    from sentry.testutils.helpers.options import override_options
+
+    def inner(key, value):
+        ctx_mgr = override_options({key: value})
+        ctx_mgr.__enter__()
+
+        request.addfinalizer(lambda: ctx_mgr.__exit__(None, None, None))
+
+    return inner
+
+
+@pytest.fixture
+def django_cache():
+    yield cache
+    cache.clear()

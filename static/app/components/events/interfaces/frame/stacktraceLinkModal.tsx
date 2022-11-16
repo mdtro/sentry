@@ -1,65 +1,79 @@
-import {Component, Fragment} from 'react';
+import {Fragment, useState} from 'react';
 import styled from '@emotion/styled';
 
-import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
+import {addSuccessMessage} from 'sentry/actionCreators/indicator';
 import {ModalRenderProps} from 'sentry/actionCreators/modal';
-import {Client} from 'sentry/api';
 import Alert from 'sentry/components/alert';
 import Button from 'sentry/components/button';
 import ButtonBar from 'sentry/components/buttonBar';
-import InputField from 'sentry/components/forms/inputField';
+import TextField from 'sentry/components/forms/fields/textField';
+import ExternalLink from 'sentry/components/links/externalLink';
+import Link from 'sentry/components/links/link';
+import List from 'sentry/components/list';
+import TextCopyInput from 'sentry/components/textCopyInput';
 import {t, tct} from 'sentry/locale';
 import space from 'sentry/styles/space';
-import {Integration, Organization, Project} from 'sentry/types';
-import {
-  getIntegrationIcon,
-  trackIntegrationAnalytics,
-} from 'sentry/utils/integrationUtil';
-import withApi from 'sentry/utils/withApi';
-import FeedbackAlert from 'sentry/views/settings/account/notifications/feedbackAlert';
+import type {Integration, Organization, Project} from 'sentry/types';
+import {trackIntegrationAnalytics} from 'sentry/utils/integrationUtil';
+import useApi from 'sentry/utils/useApi';
 
-type Props = ModalRenderProps & {
-  api: Client;
+interface StacktraceLinkModalProps extends ModalRenderProps {
   filename: string;
   integrations: Integration[];
   onSubmit: () => void;
   organization: Organization;
   project: Project;
-};
+}
 
-type State = {
-  sourceCodeInput: string;
-};
+function StacktraceLinkModal({
+  closeModal,
+  onSubmit,
+  organization,
+  integrations,
+  filename,
+  project,
+  Header,
+  Body,
+  Footer,
+}: StacktraceLinkModalProps) {
+  const api = useApi();
+  const [error, setError] = useState<null | string>(null);
+  const [sourceCodeInput, setSourceCodeInput] = useState('');
 
-class StacktraceLinkModal extends Component<Props, State> {
-  state: State = {
-    sourceCodeInput: '',
+  const onHandleChange = (input: string) => {
+    setSourceCodeInput(input);
   };
 
-  onHandleChange(sourceCodeInput: string) {
-    this.setState({
-      sourceCodeInput,
-    });
-  }
+  const sourceCodeProviders = integrations.filter(integration =>
+    ['github', 'gitlab'].includes(integration.provider?.key)
+  );
+  // If they have more than one, they'll have to navigate themselves
+  const hasOneSourceCodeIntegration = sourceCodeProviders.length === 1;
+  const sourceUrl = hasOneSourceCodeIntegration
+    ? `https://${sourceCodeProviders[0].domainName}`
+    : undefined;
+  const providerName = hasOneSourceCodeIntegration
+    ? sourceCodeProviders[0].name
+    : t('source code');
 
-  onManualSetup(provider: string) {
+  const onManualSetup = () => {
     trackIntegrationAnalytics('integrations.stacktrace_manual_option_clicked', {
       view: 'stacktrace_issue_details',
       setup_type: 'manual',
-      provider,
-      organization: this.props.organization,
+      provider:
+        sourceCodeProviders.length === 1
+          ? sourceCodeProviders[0].provider.name
+          : 'unknown',
+      organization,
     });
-  }
+  };
 
-  handleSubmit = async () => {
-    const {sourceCodeInput} = this.state;
-    const {api, closeModal, filename, onSubmit, organization, project} = this.props;
+  const handleSubmit = async () => {
     trackIntegrationAnalytics('integrations.stacktrace_submit_config', {
       setup_type: 'automatic',
       view: 'stacktrace_issue_details',
       organization,
     });
-
     const parsingEndpoint = `/projects/${organization.slug}/${project.slug}/repo-path-parsing/`;
     try {
       const configData = await api.requestPromise(parsingEndpoint, {
@@ -90,121 +104,141 @@ class StacktraceLinkModal extends Component<Props, State> {
       closeModal();
       onSubmit();
     } catch (err) {
-      const errors = err?.responseJSON
-        ? Array.isArray(err?.responseJSON)
-          ? err?.responseJSON
-          : Object.values(err?.responseJSON)
-        : [];
-      const apiErrors = errors.length > 0 ? `: ${errors.join(', ')}` : '';
-      addErrorMessage(t('Something went wrong%s', apiErrors));
+      setError(err?.responseJSON?.sourceUrl?.[0] ?? t('Unable to save configuration'));
     }
   };
 
-  render() {
-    const {sourceCodeInput} = this.state;
-    const {Header, Body, filename, integrations, organization} = this.props;
-    const baseUrl = `/settings/${organization.slug}/integrations`;
-
-    return (
-      <Fragment>
-        <Header closeButton>{t('Link Stack Trace To Source Code')}</Header>
-        <Body>
-          <ModalContainer>
-            <div>
-              <h6>{t('Automatic Setup')}</h6>
-              {tct(
-                'Enter the source code URL corresponding to stack trace filename [filename] so we can automatically set up stack trace linking for this project.',
-                {
-                  filename: <code>{filename}</code>,
-                }
-              )}
-            </div>
-            <SourceCodeInput>
-              <StyledInputField
-                inline={false}
-                flexibleControlStateSize
-                stacked
-                name="source-code-input"
-                type="text"
-                value={sourceCodeInput}
-                onChange={val => this.onHandleChange(val)}
-                placeholder={t(
-                  `https://github.com/helloworld/Hello-World/blob/master/${filename}`
-                )}
-              />
-              <ButtonBar>
-                <Button
-                  data-test-id="quick-setup-button"
-                  type="button"
-                  onClick={() => this.handleSubmit()}
-                >
-                  {t('Submit')}
-                </Button>
-              </ButtonBar>
-            </SourceCodeInput>
-            <div>
-              <h6>{t('Manual Setup')}</h6>
-              <Alert type="warning">
-                {t(
-                  'We recommend this for more complicated configurations, like projects with multiple repositories.'
-                )}
-              </Alert>
-              {t(
-                "To manually configure stack trace linking, select the integration you'd like to use for mapping:"
-              )}
-            </div>
-            <ManualSetup>
-              {integrations.map(integration => (
-                <Button
-                  key={integration.id}
-                  type="button"
-                  onClick={() => this.onManualSetup(integration.provider.key)}
-                  to={`${baseUrl}/${integration.provider.key}/${integration.id}/?tab=codeMappings&referrer=stacktrace-issue-details`}
-                >
-                  {getIntegrationIcon(integration.provider.key)}
-                  <IntegrationName>{integration.name}</IntegrationName>
-                </Button>
-              ))}
-            </ManualSetup>
-            <StyledFeedbackAlert />
-          </ModalContainer>
-        </Body>
-      </Fragment>
-    );
-  }
+  return (
+    <Fragment>
+      <Header closeButton>
+        <h4>{t('Tell us where your source code is')}</h4>
+      </Header>
+      <Body>
+        <ModalContainer>
+          {error && (
+            <StyledAlert type="error" showIcon>
+              {error === 'Could not find repo'
+                ? tct(
+                    'We don’t have access to that [provider] repo. To fix this, [link:add your repo.]',
+                    {
+                      provider: providerName,
+                      link: (
+                        <Link
+                          onClick={onManualSetup}
+                          to={
+                            hasOneSourceCodeIntegration
+                              ? `/settings/${organization.slug}/integrations/${sourceCodeProviders[0].provider.name}/${sourceCodeProviders[0].id}/`
+                              : `/settings/${organization.slug}/integrations/`
+                          }
+                        />
+                      ),
+                    }
+                  )
+                : error.includes('blank')
+                ? t('URL is required.')
+                : error}
+            </StyledAlert>
+          )}
+          {tct(
+            'We can’t find the file path for [filename] in your [provider] repo. Add the correct link below to enable git blame and suspect commits for this project.',
+            {
+              provider: providerName,
+              filename: <StyledCode>{filename}</StyledCode>,
+            }
+          )}
+          <StyledList symbol="colored-numeric">
+            <li>
+              <ItemContainer>
+                {hasOneSourceCodeIntegration
+                  ? tct('Go to [link]', {
+                      link: (
+                        <ExternalLink href={sourceUrl}>
+                          {sourceCodeProviders[0].provider.name}
+                        </ExternalLink>
+                      ),
+                    })
+                  : t('Go to your source code provider')}
+              </ItemContainer>
+            </li>
+            <li>
+              <ItemContainer>
+                <div>{t('Find the correct repo and path for the file')}</div>
+                <TextCopyInput>{filename}</TextCopyInput>
+              </ItemContainer>
+            </li>
+            <li>
+              <ItemContainer>
+                <StyledTextField
+                  inline={false}
+                  label={t('Copy the URL and paste it below')}
+                  name="source-code-input"
+                  value={sourceCodeInput}
+                  onChange={onHandleChange}
+                  placeholder={`https://github.com/helloworld/Hello-World/blob/master${
+                    filename.startsWith('/') ? '' : '/'
+                  }${filename}`}
+                />
+              </ItemContainer>
+            </li>
+          </StyledList>
+        </ModalContainer>
+      </Body>
+      <Footer>
+        <ButtonBar gap={1}>
+          <Button type="button" onClick={closeModal}>
+            {t('Cancel')}
+          </Button>
+          <Button type="button" priority="primary" onClick={handleSubmit}>
+            {t('Save')}
+          </Button>
+        </ButtonBar>
+      </Footer>
+    </Fragment>
+  );
 }
 
-const SourceCodeInput = styled('div')`
-  display: grid;
-  grid-template-columns: 5fr 1fr;
-  gap: ${space(1)};
+const StyledList = styled(List)`
+  gap: ${space(2)};
+
+  & > li {
+    display: flex;
+    padding-left: 0;
+    gap: ${space(1)};
+  }
+
+  & > li:before {
+    position: relative;
+  }
 `;
 
-const ManualSetup = styled('div')`
-  display: grid;
+const ItemContainer = styled('div')`
+  display: flex;
   gap: ${space(1)};
-  justify-items: center;
+  flex-direction: column;
+  margin-top: ${space(0.25)};
+  flex: 1;
 `;
 
 const ModalContainer = styled('div')`
   display: grid;
-  gap: ${space(3)};
-
-  code {
-    word-break: break-word;
-  }
+  gap: ${space(2)};
 `;
 
-const StyledFeedbackAlert = styled(FeedbackAlert)`
+const StyledAlert = styled(Alert)`
   margin-bottom: 0;
 `;
 
-const StyledInputField = styled(InputField)`
+const StyledCode = styled('code')`
+  word-break: break-word;
+`;
+
+const StyledTextField = styled(TextField)`
   padding: 0px;
+  flex-grow: 1;
+
+  div {
+    margin-left: 0px;
+  }
 `;
 
-const IntegrationName = styled('p')`
-  padding-left: 10px;
-`;
-
-export default withApi(StacktraceLinkModal);
+export default StacktraceLinkModal;

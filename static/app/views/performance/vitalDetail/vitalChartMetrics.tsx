@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-restricted-imports
 import {browserHistory, withRouter, WithRouterProps} from 'react-router';
 import {useTheme} from '@emotion/react';
 import moment from 'moment';
@@ -15,7 +16,7 @@ import {IconWarning} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import {DateString, MetricsApiResponse} from 'sentry/types';
 import {Series} from 'sentry/types/echarts';
-import {WebVital} from 'sentry/utils/discover/fields';
+import {WebVital} from 'sentry/utils/fields';
 import getDynamicText from 'sentry/utils/getDynamicText';
 
 import {replaceSeriesName, transformEventStatsSmoothed} from '../trends/utils';
@@ -85,7 +86,7 @@ function VitalChartMetrics({
           <QuestionTooltip
             size="sm"
             position="top"
-            title={t(`The durations shown should fall under the vital threshold.`)}
+            title={t('The durations shown should fall under the vital threshold.')}
           />
         </HeaderTitleLegend>
         <ChartZoom router={router} period={statsPeriod} start={start} end={end} utc={utc}>

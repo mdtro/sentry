@@ -8,7 +8,6 @@ import ToolbarHeader from 'sentry/components/toolbarHeader';
 import {t} from 'sentry/locale';
 import GroupingStore from 'sentry/stores/groupingStore';
 import space from 'sentry/styles/space';
-import {callIfFunction} from 'sentry/utils/callIfFunction';
 
 type Props = {
   onMerge: () => void;
@@ -25,7 +24,7 @@ class SimilarToolbar extends Component<Props, State> {
   state: State = initialState;
 
   componentWillUnmount() {
-    callIfFunction(this.listener);
+    this.listener?.();
   }
 
   onGroupChange = ({mergeList}) => {
@@ -47,12 +46,11 @@ class SimilarToolbar extends Component<Props, State> {
     return (
       <PanelHeader hasButtons>
         <Confirm
-          data-test-id="merge"
           disabled={mergeCount === 0}
           message={t('Are you sure you want to merge these issues?')}
           onConfirm={onMerge}
         >
-          <Button size="small" title={t('Merging %s issues', mergeCount)}>
+          <Button size="sm" title={t('Merging %s issues', mergeCount)}>
             {t('Merge %s', `(${mergeCount || 0})`)}
           </Button>
         </Confirm>

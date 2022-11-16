@@ -26,8 +26,10 @@ from sentry.models import (
 from sentry.snuba.models import SnubaQuery
 from sentry.tasks.deletion import run_deletion
 from sentry.testutils import TransactionTestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class DeleteOrganizationTest(TransactionTestCase):
     def test_simple(self):
         org = self.create_organization(name="test")
@@ -205,7 +207,12 @@ class DeleteOrganizationTest(TransactionTestCase):
 
         env = Environment.objects.create(organization_id=org.id, name="foo")
         snuba_query = SnubaQuery.objects.create(
-            dataset="events", aggregate="count()", time_window=60, resolution=60, environment=env
+            type=SnubaQuery.Type.ERROR.value,
+            dataset="events",
+            aggregate="count()",
+            time_window=60,
+            resolution=60,
+            environment=env,
         )
         alert_rule = AlertRule.objects.create(
             organization=org,

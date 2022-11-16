@@ -7,15 +7,17 @@ from django.db import IntegrityError, connections, models, router, transaction
 from django.utils import timezone
 from django.utils.translation import ugettext_lazy as _
 
-from sentry.app import env, locks
+from sentry.app import env
 from sentry.db.models import (
     BaseManager,
     BoundedPositiveIntegerField,
     FlexibleForeignKey,
     Model,
+    region_silo_only_model,
     sane_repr,
 )
 from sentry.db.models.utils import slugify_instance
+from sentry.locks import locks
 from sentry.utils.retries import TimedRetryPolicy
 
 if TYPE_CHECKING:
@@ -102,14 +104,21 @@ class TeamManager(BaseManager):
         self.process_resource_change(instance, **kwargs)
 
     def process_resource_change(self, instance, **kwargs):
+        from sentry.models import Organization, Project
         from sentry.tasks.codeowners import update_code_owners_schema
 
-        update_code_owners_schema.apply_async(
-            kwargs={
-                "organization": instance.organization,
-                "projects": instance.get_projects(),
-            }
-        )
+        def _spawn_task():
+            try:
+                update_code_owners_schema.apply_async(
+                    kwargs={
+                        "organization": instance.organization,
+                        "projects": list(instance.get_projects()),
+                    }
+                )
+            except (Organization.DoesNotExist, Project.DoesNotExist):
+                pass
+
+        transaction.on_commit(_spawn_task)
 
 
 # TODO(dcramer): pull in enum library
@@ -119,6 +128,7 @@ class TeamStatus:
     DELETION_IN_PROGRESS = 2
 
 
+@region_silo_only_model
 class Team(Model):
     """
     A team represents a group of individuals which maintain ownership of projects.
@@ -154,12 +164,15 @@ class Team(Model):
 
     __repr__ = sane_repr("name", "slug")
 
+    def class_name(self):
+        return "Team"
+
     def __str__(self):
         return f"{self.name} ({self.slug})"
 
     def save(self, *args, **kwargs):
         if not self.slug:
-            lock = locks.get("slug:team", duration=5)
+            lock = locks.get("slug:team", duration=5, name="team_slug")
             with TimedRetryPolicy(10)(lock.acquire):
                 slugify_instance(self, self.name, organization=self.organization)
         super().save(*args, **kwargs)

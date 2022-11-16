@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import functools
 import logging
 import time
 from abc import ABCMeta, abstractmethod
 from dataclasses import replace
 from datetime import datetime, timedelta
 from hashlib import md5
-from typing import Any, List, Mapping, Sequence, Set, Tuple, cast
+from typing import Any, List, Mapping, Optional, Sequence, Set, Tuple, cast
 
 import sentry_sdk
 from django.utils import timezone
@@ -26,20 +27,33 @@ from snuba_sdk.expressions import Expression
 from snuba_sdk.query import Query
 from snuba_sdk.relationships import Relationship
 
-from sentry import options
+from sentry import features, options
 from sentry.api.event_search import SearchFilter
 from sentry.api.paginator import DateTimePaginator, Paginator, SequencePaginator
+from sentry.api.serializers.models.group import SKIP_SNUBA_FIELDS
 from sentry.constants import ALLOWED_FUTURE_DELTA
 from sentry.db.models.manager.base_query_set import BaseQuerySet
-from sentry.models import Environment, Group, Optional, Project
+from sentry.issues.search import (
+    SEARCH_FILTER_UPDATERS,
+    SEARCH_STRATEGIES,
+    IntermediateSearchQueryPartial,
+    MergeableRow,
+    SearchQueryPartial,
+    group_categories_from,
+)
+from sentry.models import Environment, Group, Project
 from sentry.search.events.fields import DateArg
 from sentry.search.events.filter import convert_search_filter_to_snuba_query
 from sentry.search.utils import validate_cdc_search_filters
+from sentry.types.issues import GroupCategory
 from sentry.utils import json, metrics, snuba
 from sentry.utils.cursors import Cursor, CursorResult
+from sentry.utils.snuba import SnubaQueryParams, aliased_query_params, bulk_raw_query
 
 
-def get_search_filter(search_filters: Sequence[SearchFilter], name: str, operator: str) -> Any:
+def get_search_filter(
+    search_filters: Optional[Sequence[SearchFilter]], name: str, operator: str
+) -> Optional[Any]:
     """
     Finds the value of a search filter with the passed name and operator. If
     multiple values are found, returns the most restrictive value
@@ -64,7 +78,8 @@ def get_search_filter(search_filters: Sequence[SearchFilter], name: str, operato
 
 class AbstractQueryExecutor(metaclass=ABCMeta):
     """This class serves as a template for Query Executors.
-    We subclass it in order to implement query methods (we use it to implement two classes: joined Postgres+Snuba queries, and Snuba only queries)
+    We subclass it in order to implement query methods (we use it to implement two classes: joined
+    Postgres+Snuba queries, and Snuba only queries)
     It's used to keep the query logic out of the actual search backend,
     which can now just build query parameters and use the appropriate query executor to run the query
     """
@@ -129,70 +144,36 @@ class AbstractQueryExecutor(metaclass=ABCMeta):
         We usually return a paginator object, which contains the results and the number of hits"""
         raise NotImplementedError
 
-    def snuba_search(
+    def _convert_search_filters(
         self,
+        organization_id: int,
+        project_ids: Sequence[int],
+        environments: Optional[Sequence[str]],
+        search_filters: Sequence[SearchFilter],
+    ) -> list[Optional[Any]]:
+        """Converts the SearchFilter format into snuba-compatible clauses"""
+        converted_filters: list[Optional[Sequence[Any]]] = []
+        for search_filter in search_filters or ():
+            converted_filters.append(
+                convert_search_filter_to_snuba_query(
+                    search_filter,
+                    params={
+                        "organization_id": organization_id,
+                        "project_id": project_ids,
+                        "environment": environments,
+                    },
+                )
+            )
+
+        return converted_filters
+
+    def _prepare_aggregations(
+        self,
+        sort_field: str,
         start: datetime,
         end: datetime,
-        project_ids: Sequence[int],
-        environment_ids: Sequence[int],
-        sort_field: str,
-        organization_id: int,
-        cursor: Optional[Cursor] = None,
-        group_ids: Optional[Sequence[int]] = None,
-        limit: Optional[int] = None,
-        offset: int = 0,
-        get_sample: bool = False,
-        search_filters: Optional[Sequence[SearchFilter]] = None,
-    ) -> Tuple[List[Tuple[int, Any]], int]:
-        """
-        Returns a tuple of:
-        * a sorted list of (group_id, group_score) tuples sorted descending by score,
-        * the count of total results (rows) available for this query.
-        """
-
-        filters = {"project_id": project_ids}
-
-        environments = None
-        if environment_ids is not None:
-            filters["environment"] = environment_ids
-            environments = list(
-                Environment.objects.filter(
-                    organization_id=organization_id, id__in=environment_ids
-                ).values_list("name", flat=True)
-            )
-
-        if group_ids:
-            filters["group_id"] = sorted(group_ids)
-
-        conditions = []
-        having = []
-        for search_filter in search_filters:
-            if (
-                # Don't filter on postgres fields here, they're not available
-                search_filter.key.name in self.postgres_only_fields
-                or
-                # We special case date
-                search_filter.key.name == "date"
-            ):
-                continue
-            converted_filter = convert_search_filter_to_snuba_query(
-                search_filter,
-                params={
-                    "organization_id": organization_id,
-                    "project_id": project_ids,
-                    "environment": environments,
-                },
-            )
-            converted_filter = self._transform_converted_filter(
-                search_filter, converted_filter, project_ids, environment_ids
-            )
-            if converted_filter is not None:
-                # Ensure that no user-generated tags that clashes with aggregation_defs is added to having
-                if search_filter.key.name in self.aggregation_defs and not search_filter.key.is_tag:
-                    having.append(converted_filter)
-                else:
-                    conditions.append(converted_filter)
-
+        having: Sequence[Sequence[Any]],
+    ) -> list[Any]:
         extra_aggregations = self.dependency_aggregations.get(sort_field, [])
         required_aggregations = set([sort_field, "total"] + extra_aggregations)
         for h in having:
@@ -208,6 +189,43 @@ class AbstractQueryExecutor(metaclass=ABCMeta):
                 aggregation = aggregation(start, end)
             aggregations.append(aggregation + [alias])
 
+        return aggregations
+
+    def _prepare_params_for_category(
+        self,
+        group_category: GroupCategory,
+        query_partial: IntermediateSearchQueryPartial,
+        organization_id: int,
+        project_ids: Sequence[int],
+        environments: Optional[Sequence[str]],
+        search_filters: Sequence[SearchFilter],
+        sort_field: str,
+        start: datetime,
+        end: datetime,
+        cursor: Optional[Cursor],
+        get_sample: bool,
+    ) -> SnubaQueryParams:
+        # remove filters not relevant to the group_category
+        search_filters = SEARCH_FILTER_UPDATERS[group_category](search_filters)
+
+        # convert search_filters to snuba format
+        converted_filters = self._convert_search_filters(
+            organization_id, project_ids, environments, search_filters
+        )
+
+        # categorize the clauses into having or condition clauses
+        having = []
+        conditions = []
+        for search_filter, converted_filter in zip(search_filters, converted_filters):
+            if converted_filter is not None:
+                # Ensure that no user-generated tags that clashes with aggregation_defs is added to having
+                if search_filter.key.name in self.aggregation_defs and not search_filter.key.is_tag:
+                    having.append(converted_filter)
+                else:
+                    conditions.append(converted_filter)
+
+        aggregations = self._prepare_aggregations(sort_field, start, end, having)
+
         if cursor is not None:
             having.append((sort_field, ">=" if cursor.is_prev else "<=", cursor.value))
 
@@ -215,61 +233,137 @@ class AbstractQueryExecutor(metaclass=ABCMeta):
         if get_sample:
             query_hash = md5(json.dumps(conditions).encode("utf-8")).hexdigest()[:8]
             selected_columns.append(["cityHash64", [f"'{query_hash}'", "group_id"], "sample"])
-            sort_field = "sample"
-            orderby = [sort_field]
-            referrer = "search_sample"
+            orderby = ["sample"]
         else:
             # Get the top matching groups by score, i.e. the actual search results
             # in the order that we want them.
-            orderby = [
-                f"-{sort_field}",
-                "group_id",
-            ]  # ensure stable sort within the same score
-            referrer = "search"
+            orderby = [f"-{sort_field}", "group_id"]  # ensure stable sort within the same score
 
-        snuba_results = snuba.aliased_query(
-            dataset=self.dataset,
-            start=start,
-            end=end,
-            selected_columns=selected_columns,
-            groupby=["group_id"],
-            conditions=conditions,
-            having=having,
-            filter_keys=filters,
-            aggregations=aggregations,
-            orderby=orderby,
-            referrer=referrer,
-            limit=limit,
-            offset=offset,
-            totals=True,  # Needs to have totals_mode=after_having_exclusive so we get groups matching HAVING only
-            turbo=get_sample,  # Turn off FINAL when in sampling mode
-            sample=1,  # Don't use clickhouse sampling, even when in turbo mode.
-            condition_resolver=snuba.get_snuba_column_name,
+        pinned_query_partial: SearchQueryPartial = cast(
+            SearchQueryPartial,
+            functools.partial(
+                query_partial,
+                selected_columns=selected_columns,
+                groupby=["group_id"],
+                having=having,
+                orderby=orderby,
+            ),
         )
-        rows = snuba_results["data"]
-        total = snuba_results["totals"]["total"]
+
+        return SEARCH_STRATEGIES[group_category](
+            pinned_query_partial,
+            aggregations,
+            organization_id,
+            project_ids,
+            environments,
+            conditions,
+        )
+
+    def snuba_search(
+        self,
+        start: datetime,
+        end: datetime,
+        project_ids: Sequence[int],
+        environment_ids: Optional[Sequence[int]],
+        sort_field: str,
+        organization_id: int,
+        cursor: Optional[Cursor] = None,
+        group_ids: Optional[Sequence[int]] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        get_sample: bool = False,
+        search_filters: Optional[Sequence[SearchFilter]] = None,
+    ) -> Tuple[List[Tuple[int, Any]], int]:
+        """Queries Snuba for events with associated Groups based on the input criteria.
+
+        Returns a tuple of:
+            * a sorted list of (group_id, group_score) tuples sorted descending by score,
+            * the count of total results (rows) available for this query.
+        """
+        filters = {"project_id": project_ids}
+
+        environments = None
+        if environment_ids is not None:
+            filters["environment"] = environment_ids
+            environments = list(
+                Environment.objects.filter(
+                    organization_id=organization_id, id__in=environment_ids
+                ).values_list("name", flat=True)
+            )
+
+        if group_ids:
+            filters["group_id"] = sorted(group_ids)
+
+        referrer = "search_sample" if get_sample else "search"
+
+        snuba_search_filters = [
+            sf
+            for sf in search_filters or ()
+            # remove any search_filters that are only available in postgres, we special case date
+            if not (sf.key.name in self.postgres_only_fields or sf.key.name == "date")
+        ]
+
+        # common pinned parameters that won't change based off datasource
+        query_partial: IntermediateSearchQueryPartial = cast(
+            IntermediateSearchQueryPartial,
+            functools.partial(
+                aliased_query_params,
+                start=start,
+                end=end,
+                limit=limit,
+                offset=offset,
+                referrer=referrer,
+                filter_keys=filters,
+                totals=True,  # Needs to have totals_mode=after_having_exclusive so we get groups matching HAVING only
+                turbo=get_sample,  # Turn off FINAL when in sampling mode
+                sample=1,  # Don't use clickhouse sampling, even when in turbo mode.
+            ),
+        )
+
+        group_categories = group_categories_from(search_filters)
+        query_params_for_categories = [
+            self._prepare_params_for_category(
+                gc,
+                query_partial,
+                organization_id,
+                project_ids,
+                environments,
+                snuba_search_filters,
+                sort_field,
+                start,
+                end,
+                cursor,
+                get_sample,
+            )
+            for gc in (SEARCH_STRATEGIES.keys() if not group_categories else group_categories)
+        ]
+
+        query_params_for_categories = [
+            query_params for query_params in query_params_for_categories if query_params is not None
+        ]
+
+        bulk_query_results = bulk_raw_query(query_params_for_categories, referrer=referrer)
+
+        rows: list[MergeableRow] = []
+        total = 0
+        row_length = 0
+        for bulk_result in bulk_query_results:
+            if bulk_result:
+                if bulk_result["data"]:
+                    rows.extend(bulk_result["data"])
+                if bulk_result["totals"]["total"]:
+                    total += bulk_result["totals"]["total"]
+                row_length += len(bulk_result)
+
+        rows.sort(key=lambda row: row["group_id"])
 
         if not get_sample:
-            metrics.timing("snuba.search.num_result_groups", len(rows))
+            metrics.timing("snuba.search.num_result_groups", row_length)
 
-        return [(row["group_id"], row[sort_field]) for row in rows], total
+        if get_sample:
+            sort_field = "sample"
 
-    def _transform_converted_filter(
-        self,
-        search_filter: Sequence[SearchFilter],
-        converted_filter: Optional[Sequence[any]],
-        project_ids: Sequence[int],
-        environment_ids: Optional[Sequence[int]] = None,
-    ) -> Optional[Sequence[any]]:
-        """
-        This method serves as a hook - after we convert the search_filter into a
-        snuba compatible filter (which converts it in a general dataset
-        ambiguous method), we may want to transform the query - maybe change the
-        value (time formats, translate value into id (like turning Release
-        `version` into `id`) or vice versa), alias fields, etc. By default, no
-        transformation is done.
-        """
-        return converted_filter
+        return [(row["group_id"], row[sort_field]) for row in rows], total  # type: ignore[literal-required]
 
     def has_sort_strategy(self, sort_by: str) -> bool:
         return sort_by in self.sort_strategies.keys()
@@ -292,19 +386,8 @@ class PostgresSnubaQueryExecutor(AbstractQueryExecutor):
 
     logger = logging.getLogger("sentry.search.postgressnuba")
     dependency_aggregations = {"priority": ["last_seen", "times_seen"]}
-    postgres_only_fields = {
-        "status",
-        "for_review",
-        "assigned_or_suggested",
-        "bookmarked_by",
-        "assigned_to",
-        "unassigned",
-        "linked",
-        "subscribed_by",
-        "first_release",
-        "first_seen",
-        "regressed_in_release",
-    }
+    postgres_only_fields = {*SKIP_SNUBA_FIELDS, "regressed_in_release"}
+    # add specific fields here on top of skip_snuba_fields from the serializer
     sort_strategies = {
         "date": "last_seen",
         "freq": "times_seen",
@@ -349,41 +432,20 @@ class PostgresSnubaQueryExecutor(AbstractQueryExecutor):
         date_to: Optional[datetime],
         max_hits: Optional[int] = None,
     ) -> CursorResult[Group]:
-
         now = timezone.now()
         end = None
+        paginator_options = {} if paginator_options is None else paginator_options
         end_params = [_f for _f in [date_to, get_search_filter(search_filters, "date", "<")] if _f]
         if end_params:
             end = min(end_params)
 
         if not end:
             end = now + ALLOWED_FUTURE_DELTA
-
-            # This search is for some time window that ends with "now",
-            # so if the requested sort is `date` (`last_seen`) and there
-            # are no other Snuba-based search predicates, we can simply
-            # return the results from Postgres.
-            if (
-                cursor is None
-                and sort_by == "date"
-                and
-                # This handles tags and date parameters for search filters.
-                not [
-                    sf
-                    for sf in search_filters
-                    if sf.key.name not in self.postgres_only_fields.union(["date"])
-                ]
-            ):
-                group_queryset = group_queryset.order_by("-last_seen")
-                paginator = DateTimePaginator(group_queryset, "-last_seen", **paginator_options)
-                metrics.incr("snuba.search.postgres_only")
-                # When its a simple django-only search, we count_hits like normal
-
-                # TODO: Add types to paginators and remove this
-                return cast(
-                    CursorResult[Group],
-                    paginator.get_result(limit, cursor, count_hits=count_hits, max_hits=max_hits),
-                )
+            allow_postgres_only_search = True
+        else:
+            allow_postgres_only_search = features.has(
+                "organizations:issue-search-allow-postgres-only-search", projects[0].organization
+            )
 
         # TODO: Presumably we only want to search back to the project's max
         # retention date, which may be closer than 90 days in the past, but
@@ -406,6 +468,40 @@ class PostgresSnubaQueryExecutor(AbstractQueryExecutor):
             # in the future we should find a way to notify the user that their search
             # is invalid.
             return self.empty_result
+
+        # If the requested sort is `date` (`last_seen`) and there
+        # are no other Snuba-based search predicates, we can simply
+        # return the results from Postgres.
+        if (
+            allow_postgres_only_search
+            and cursor is None
+            and sort_by == "date"
+            and
+            # This handles tags and date parameters for search filters.
+            not [
+                sf
+                for sf in (search_filters or ())
+                if sf.key.name not in self.postgres_only_fields.union(["date"])
+            ]
+        ):
+            group_queryset = (
+                group_queryset.using_replica()
+                .filter(last_seen__gte=start, last_seen__lte=end)
+                .order_by("-last_seen")
+            )
+            if not features.has("organizations:performance-issues", projects[0].organization):
+                # Make sure we only see error issues if the performance issue feature is disabled
+                group_queryset = group_queryset.filter(type=GroupCategory.ERROR.value)
+
+            paginator = DateTimePaginator(group_queryset, "-last_seen", **paginator_options)
+            metrics.incr("snuba.search.postgres_only")
+            # When it's a simple django-only search, we count_hits like normal
+
+            # TODO: Add types to paginators and remove this
+            return cast(
+                CursorResult[Group],
+                paginator.get_result(limit, cursor, count_hits=count_hits, max_hits=max_hits),
+            )
 
         # Here we check if all the django filters reduce the set of groups down
         # to something that we can send down to Snuba in a `group_id IN (...)`
@@ -585,13 +681,13 @@ class PostgresSnubaQueryExecutor(AbstractQueryExecutor):
         projects: Sequence[Project],
         retention_window_start: Optional[datetime],
         group_queryset: Query,
-        environments: Sequence[Environment],
+        environments: Optional[Sequence[Environment]],
         sort_by: str,
         limit: int,
         cursor: Cursor | None,
         count_hits: bool,
         paginator_options: Mapping[str, Any],
-        search_filters: Sequence[SearchFilter],
+        search_filters: Optional[Sequence[SearchFilter]],
         start: datetime,
         end: datetime,
     ) -> Optional[int]:
@@ -664,6 +760,7 @@ class PostgresSnubaQueryExecutor(AbstractQueryExecutor):
                 hit_ratio = filtered_count / float(snuba_count)
                 hits = int(hit_ratio * snuba_total)
                 return hits
+        return None
 
 
 class InvalidQueryForExecutor(Exception):
@@ -751,7 +848,7 @@ class CdcPostgresSnubaQueryExecutor(PostgresSnubaQueryExecutor):
     def calculate_start_end(
         self,
         retention_window_start: Optional[datetime],
-        search_filters: Sequence[SearchFilter],
+        search_filters: Optional[Sequence[SearchFilter]],
         date_from: Optional[datetime],
         date_to: Optional[datetime],
     ) -> Tuple[datetime, datetime, datetime]:
@@ -775,13 +872,13 @@ class CdcPostgresSnubaQueryExecutor(PostgresSnubaQueryExecutor):
         projects: Sequence[Project],
         retention_window_start: Optional[datetime],
         group_queryset: BaseQuerySet,
-        environments: Sequence[Environment],
+        environments: Optional[Sequence[Environment]],
         sort_by: str,
         limit: int,
         cursor: Optional[Cursor],
         count_hits: bool,
-        paginator_options: Mapping[str, Any],
-        search_filters: Sequence[SearchFilter],
+        paginator_options: Optional[Mapping[str, Any]],
+        search_filters: Optional[Sequence[SearchFilter]],
         date_from: Optional[datetime],
         date_to: Optional[datetime],
         max_hits: Optional[int] = None,
@@ -817,7 +914,7 @@ class CdcPostgresSnubaQueryExecutor(PostgresSnubaQueryExecutor):
         ]
         # TODO: This is still basically only handling status, handle this better once we introduce
         # more conditions.
-        for search_filter in search_filters:
+        for search_filter in search_filters or ():
             where_conditions.append(
                 Condition(
                     Column(search_filter.key.name, e_group), Op.IN, search_filter.value.raw_value
@@ -866,6 +963,7 @@ class CdcPostgresSnubaQueryExecutor(PostgresSnubaQueryExecutor):
                 0
             ]["count"]
 
+        paginator_options = paginator_options or {}
         paginator_results = SequencePaginator(
             [(row["score"], row["g.id"]) for row in data],
             reverse=True,

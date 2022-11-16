@@ -10,11 +10,10 @@ import DiscoverQuery from 'sentry/utils/discover/discoverQuery';
 import EventView from 'sentry/utils/discover/eventView';
 import {
   isAggregateField,
-  QueryFieldValue,
   SPAN_OP_BREAKDOWN_FIELDS,
   SPAN_OP_RELATIVE_BREAKDOWN_FIELD,
-  WebVital,
 } from 'sentry/utils/discover/fields';
+import {WebVital} from 'sentry/utils/fields';
 import {removeHistogramQueryStrings} from 'sentry/utils/performance/histogram';
 import {decodeScalar} from 'sentry/utils/queryString';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
@@ -36,6 +35,8 @@ import {
   EventsDisplayFilterName,
   filterEventsDisplayToLocationQuery,
   getEventsFilterOptions,
+  getPercentilesEventView,
+  mapPercentileValues,
 } from './utils';
 
 type PercentileValues = Record<EventsDisplayFilterName, number>;
@@ -63,12 +64,24 @@ function TransactionEvents(props: Props) {
 }
 
 function EventsContentWrapper(props: ChildProps) {
-  const {location, organization, eventView, transactionName, setError} = props;
+  const {
+    location,
+    organization,
+    eventView,
+    transactionName,
+    setError,
+    projectId,
+    projects,
+  } = props;
   const eventsDisplayFilterName = decodeEventsDisplayFilterFromLocation(location);
   const spanOperationBreakdownFilter = decodeFilterFromLocation(location);
   const webVital = getWebVital(location);
 
+  const totalEventsView = eventView.clone();
   const percentilesView = getPercentilesEventView(eventView);
+
+  totalEventsView.sorts = [];
+  totalEventsView.fields = [{field: 'count()', width: -1}];
 
   const getFilteredEventView = (percentiles: PercentileValues) => {
     const filter = getEventsFilterOptions(spanOperationBreakdownFilter, percentiles)[
@@ -148,39 +161,60 @@ function EventsContentWrapper(props: ChildProps) {
 
   return (
     <DiscoverQuery
-      eventView={percentilesView}
+      eventView={totalEventsView}
       orgSlug={organization.slug}
       location={location}
-      referrer="api.performance.transaction-events"
+      setError={error => setError(error?.message)}
+      referrer="api.performance.transaction-summary"
+      cursor="0:0:0"
       useEvents
     >
-      {({isLoading, tableData}) => {
-        if (isLoading) {
-          return (
-            <Layout.Main fullWidth>
-              <LoadingIndicator />
-            </Layout.Main>
-          );
-        }
-
-        const percentiles: PercentileValues = tableData
-          ?.data?.[0] as any as PercentileValues;
-        const filteredEventView = getFilteredEventView(percentiles);
+      {({isLoading: isTotalEventsLoading, tableData: table}) => {
+        const totalEventCount: string =
+          table?.data[0]?.['count()']?.toLocaleString() || '';
 
         return (
-          <EventsContent
+          <DiscoverQuery
+            eventView={percentilesView}
+            orgSlug={organization.slug}
             location={location}
-            organization={organization}
-            eventView={filteredEventView}
-            transactionName={transactionName}
-            spanOperationBreakdownFilter={spanOperationBreakdownFilter}
-            onChangeSpanOperationBreakdownFilter={onChangeSpanOperationBreakdownFilter}
-            eventsDisplayFilterName={eventsDisplayFilterName}
-            onChangeEventsDisplayFilter={onChangeEventsDisplayFilter}
-            percentileValues={percentiles}
-            webVital={webVital}
-            setError={setError}
-          />
+            referrer="api.performance.transaction-events"
+            useEvents
+          >
+            {({isLoading, tableData}) => {
+              if (isTotalEventsLoading || isLoading) {
+                return (
+                  <Layout.Main fullWidth>
+                    <LoadingIndicator />
+                  </Layout.Main>
+                );
+              }
+
+              const percentileData = tableData?.data?.[0];
+              const percentiles = mapPercentileValues(percentileData);
+              const filteredEventView = getFilteredEventView(percentiles);
+              return (
+                <EventsContent
+                  totalEventCount={totalEventCount}
+                  location={location}
+                  organization={organization}
+                  eventView={filteredEventView}
+                  transactionName={transactionName}
+                  spanOperationBreakdownFilter={spanOperationBreakdownFilter}
+                  onChangeSpanOperationBreakdownFilter={
+                    onChangeSpanOperationBreakdownFilter
+                  }
+                  eventsDisplayFilterName={eventsDisplayFilterName}
+                  onChangeEventsDisplayFilter={onChangeEventsDisplayFilter}
+                  percentileValues={percentiles}
+                  projectId={projectId}
+                  projects={projects}
+                  webVital={webVital}
+                  setError={setError}
+                />
+              );
+            }}
+          </DiscoverQuery>
         );
       }}
     </DiscoverQuery>
@@ -208,9 +242,11 @@ function getWebVital(location: Location): WebVital | undefined {
 
 function generateEventView({
   location,
+  organization,
   transactionName,
 }: {
   location: Location;
+  organization: Organization;
   transactionName: string;
 }): EventView {
   const query = decodeScalar(location.query.query, '');
@@ -234,6 +270,9 @@ function generateEventView({
     'trace',
     'timestamp',
   ];
+  if (organization.features.includes('session-replay-ui')) {
+    fields.push('replayId');
+  }
   const breakdown = decodeFilterFromLocation(location);
   if (breakdown !== SpanOperationBreakdownFilter.None) {
     fields.splice(2, 1, `spans.${breakdown}`);
@@ -257,33 +296,6 @@ function generateEventView({
     },
     location
   );
-}
-
-function getPercentilesEventView(eventView: EventView): EventView {
-  const percentileColumns: QueryFieldValue[] = [
-    {
-      kind: 'function',
-      function: ['p100', '', undefined, undefined],
-    },
-    {
-      kind: 'function',
-      function: ['p99', '', undefined, undefined],
-    },
-    {
-      kind: 'function',
-      function: ['p95', '', undefined, undefined],
-    },
-    {
-      kind: 'function',
-      function: ['p75', '', undefined, undefined],
-    },
-    {
-      kind: 'function',
-      function: ['p50', '', undefined, undefined],
-    },
-  ];
-
-  return eventView.withColumns(percentileColumns);
 }
 
 export default withProjects(withOrganization(TransactionEvents));

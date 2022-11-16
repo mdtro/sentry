@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useRef} from 'react';
+import {useCallback, useEffect, useRef} from 'react';
 import styled from '@emotion/styled';
 import {AnimatePresence, motion} from 'framer-motion';
 
@@ -11,11 +11,14 @@ import Tooltip from 'sentry/components/tooltip';
 import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
 import {OnboardingTask, OnboardingTaskKey, Organization, Project} from 'sentry/types';
+import {isDemoWalkthrough} from 'sentry/utils/demoMode';
+import {useSandboxTasks} from 'sentry/utils/demoWalkthrough';
 import testableTransition from 'sentry/utils/testableTransition';
 import useApi from 'sentry/utils/useApi';
-import withOrganization from 'sentry/utils/withOrganization';
+import useOrganization from 'sentry/utils/useOrganization';
 import withProjects from 'sentry/utils/withProjects';
-import {usePersistedOnboardingState} from 'sentry/views/onboarding/targetedOnboarding/utils';
+import {OnboardingState} from 'sentry/views/onboarding/types';
+import {usePersistedOnboardingState} from 'sentry/views/onboarding/utils';
 
 import ProgressHeader from './progressHeader';
 import Task from './task';
@@ -24,7 +27,6 @@ import {findActiveTasks, findCompleteTasks, findUpcomingTasks, taskIsDone} from 
 
 type Props = Pick<CommonSidebarProps, 'orientation' | 'collapsed'> & {
   onClose: () => void;
-  organization: Organization;
   projects: Project[];
 };
 
@@ -53,8 +55,10 @@ Heading.defaultProps = {
   transition: testableTransition(),
 };
 
+const completeNowText = isDemoWalkthrough() ? t('Sentry Basics') : t('Next Steps');
+
 const customizedTasksHeading = <Heading key="customized">{t('The Basics')}</Heading>;
-const completeNowHeading = <Heading key="now">{t('Next Steps')}</Heading>;
+const completeNowHeading = <Heading key="now">{completeNowText}</Heading>;
 const upcomingTasksHeading = (
   <Heading key="upcoming">
     <Tooltip
@@ -67,14 +71,33 @@ const upcomingTasksHeading = (
 );
 const completedTasksHeading = <Heading key="complete">{t('Completed')}</Heading>;
 
-function OnboardingWizardSidebar({
-  organization,
-  collapsed,
-  orientation,
-  onClose,
-  projects,
-}: Props) {
+export const useGetTasks = (
+  organization: Organization,
+  projects: Project[],
+  onboardingState: OnboardingState | null
+) => {
+  const callback = useCallback(() => {
+    const all = getMergedTasks({
+      organization,
+      projects,
+      onboardingState: onboardingState || undefined,
+    }).filter(task => task.display);
+    const filteredTasks = all.filter(task => !task.renderCard);
+    return {
+      allTasks: all,
+      customTasks: all.filter(task => task.renderCard),
+      active: filteredTasks.filter(findActiveTasks),
+      upcoming: filteredTasks.filter(findUpcomingTasks),
+      complete: filteredTasks.filter(findCompleteTasks),
+    };
+  }, [organization, projects, onboardingState]);
+  return isDemoWalkthrough() ? useSandboxTasks : callback;
+};
+
+function OnboardingWizardSidebar({collapsed, orientation, onClose, projects}: Props) {
   const api = useApi();
+  const organization = useOrganization();
+
   const [onboardingState, setOnboardingState] = usePersistedOnboardingState();
 
   const markCompletionTimeout = useRef<number | undefined>();
@@ -93,22 +116,13 @@ function OnboardingWizardSidebar({
       markCompletionSeenTimeout.current = window.setTimeout(resolve, time);
     });
   }
+  const getOnboardingTasks = useGetTasks(organization, projects, onboardingState);
 
-  const {allTasks, customTasks, active, upcoming, complete} = useMemo(() => {
-    const all = getMergedTasks({
-      organization,
-      projects,
-      onboardingState: onboardingState || undefined,
-    }).filter(task => task.display);
-    const tasks = all.filter(task => !task.renderCard);
-    return {
-      allTasks: all,
-      customTasks: all.filter(task => task.renderCard),
-      active: tasks.filter(findActiveTasks),
-      upcoming: tasks.filter(findUpcomingTasks),
-      complete: tasks.filter(findCompleteTasks),
-    };
-  }, [organization, projects, onboardingState]);
+  const {allTasks, customTasks, active, upcoming, complete} = getOnboardingTasks({
+    organization,
+    projects,
+    onboardingState: onboardingState || undefined,
+  });
 
   const markTasksAsSeen = useCallback(
     async function () {
@@ -269,4 +283,4 @@ const TopRight = styled('img')`
   width: 60%;
 `;
 
-export default withOrganization(withProjects(OnboardingWizardSidebar));
+export default withProjects(OnboardingWizardSidebar);

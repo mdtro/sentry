@@ -10,7 +10,6 @@ import space from 'sentry/styles/space';
 import {defined} from 'sentry/utils';
 import {TableDataRow} from 'sentry/utils/discover/discoverQuery';
 import {
-  getAggregateAlias,
   isEquationAlias,
   isRelativeSpanOperationBreakdownField,
 } from 'sentry/utils/discover/fields';
@@ -87,8 +86,18 @@ export function updateQuery(
         const negation = `!${key}`;
         value = Array.isArray(value) ? value : [String(value)];
         const currentNegations = results.getFilterValues(negation);
-        value = [...new Set([...currentNegations, ...value])];
-        results.setFilterValues(negation, value);
+        results.removeFilter(negation);
+        // We shouldn't escape any of the existing conditions since the
+        // existing conditions have already been set an verified by the user
+        results.addFilterValues(
+          negation,
+          currentNegations.filter(
+            filterValue => !(value as string[]).includes(filterValue)
+          ),
+          false
+        );
+        // Escapes the new condition if necessary
+        results.addFilterValues(negation, value);
       }
       break;
     case Actions.SHOW_GREATER_THAN: {
@@ -138,9 +147,7 @@ function makeCellActions({
     return null;
   }
 
-  const fieldAlias = getAggregateAlias(column.name);
-
-  let value = dataRow[fieldAlias];
+  let value = dataRow[column.name];
 
   // error.handled is a strange field where null = true.
   if (
@@ -445,6 +452,7 @@ class CellAction extends Component<Props, State> {
       <Container
         onMouseEnter={this.handleMouseEnter}
         onMouseLeave={this.handleMouseLeave}
+        data-test-id="cell-action-container"
       >
         {children}
         {isHovering && this.renderMenu()}

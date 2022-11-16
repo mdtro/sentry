@@ -181,13 +181,13 @@ class IncidentsList extends AsyncComponent<Props, State & AsyncComponent['state'
 
     const actions = (
       <Fragment>
-        <Button size="small" external href={DOCS_URL}>
+        <Button size="sm" external href={DOCS_URL}>
           {t('View Features')}
         </Button>
         <CreateAlertButton
           organization={organization}
           iconProps={{size: 'xs'}}
-          size="small"
+          size="sm"
           priority="primary"
           referrer="alert_stream"
         >
@@ -258,22 +258,13 @@ class IncidentsList extends AsyncComponent<Props, State & AsyncComponent['state'
   }
 
   renderBody() {
-    const {params, organization, router, location} = this.props;
+    const {params, router, location} = this.props;
     const {orgId} = params;
 
     return (
       <SentryDocumentTitle title={t('Alerts')} orgSlug={orgId}>
-        <PageFiltersContainer
-          organization={organization}
-          showDateSelector={false}
-          hideGlobalHeader
-        >
-          <AlertHeader
-            organization={organization}
-            router={router}
-            activeTab="stream"
-            projectSlugs={this.projectsFromIncidents}
-          />
+        <PageFiltersContainer>
+          <AlertHeader router={router} activeTab="stream" />
           <Layout.Body>
             <Layout.Main fullWidth>
               {!this.tryRenderOnboarding() && (

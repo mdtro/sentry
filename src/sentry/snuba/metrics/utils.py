@@ -9,8 +9,10 @@ __all__ = (
     "MetricType",
     "OP_TO_SNUBA_FUNCTION",
     "AVAILABLE_OPERATIONS",
+    "AVAILABLE_GENERIC_OPERATIONS",
     "OPERATIONS_TO_ENTITY",
     "METRIC_TYPE_TO_ENTITY",
+    "FILTERABLE_TAGS",
     "FIELD_ALIAS_MAPPINGS",
     "Tag",
     "TagValue",
@@ -31,12 +33,15 @@ __all__ = (
     "combine_dictionary_of_list_values",
     "get_intervals",
     "OP_REGEX",
+    "CUSTOM_MEASUREMENT_DATASETS",
+    "DATASET_COLUMNS",
+    "NON_RESOLVABLE_TAG_VALUES",
 )
 
 
 import re
 from abc import ABC
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import (
     Collection,
     Dict,
@@ -57,6 +62,7 @@ MAX_POINTS = 10000
 GRANULARITY = 24 * 60 * 60
 TS_COL_QUERY = "timestamp"
 TS_COL_GROUP = "bucketed_time"
+METRICS_LAYER_GRANULARITIES = [86400, 3600, 60]
 
 TAG_REGEX = re.compile(r"^([\w.]+)$")
 
@@ -74,12 +80,46 @@ MetricOperationType = Literal[
     "p95",
     "p99",
     "histogram",
+    "rate",
+    "count_web_vitals",
+    "count_transaction_name",
+    "team_key_transaction",
 ]
-MetricUnit = Literal["seconds"]
+MetricUnit = Literal[
+    "nanosecond",
+    "microsecond",
+    "millisecond",
+    "second",
+    "minute",
+    "hour",
+    "day",
+    "week",
+    "bit",
+    "byte",
+    "kibibyte",
+    "mebibyte",
+    "gibibyte",
+    "tebibyte",
+    "pebibyte",
+    "exbibyte",
+    "kilobyte",
+    "megabyte",
+    "gigabyte",
+    "terabyte",
+    "petabyte",
+    "exabyte",
+]
 #: The type of metric, which determines the snuba entity to query
 MetricType = Literal["counter", "set", "distribution", "numeric"]
 
-MetricEntity = Literal["metrics_counters", "metrics_sets", "metrics_distributions"]
+MetricEntity = Literal[
+    "metrics_counters",
+    "metrics_sets",
+    "metrics_distributions",
+    "generic_metrics_counters",
+    "generic_metrics_sets",
+    "generic_metrics_distributions",
+]
 
 OP_TO_SNUBA_FUNCTION = {
     "metrics_counters": {"sum": "sumIf"},
@@ -94,9 +134,29 @@ OP_TO_SNUBA_FUNCTION = {
         "p95": "quantilesIf(0.95)",
         "p99": "quantilesIf(0.99)",
         "histogram": "histogramIf(250)",
+        "sum": "sumIf",
     },
     "metrics_sets": {"count_unique": "uniqIf"},
 }
+GENERIC_OP_TO_SNUBA_FUNCTION = {
+    "generic_metrics_counters": OP_TO_SNUBA_FUNCTION["metrics_counters"],
+    "generic_metrics_distributions": OP_TO_SNUBA_FUNCTION["metrics_distributions"],
+    "generic_metrics_sets": OP_TO_SNUBA_FUNCTION["metrics_sets"],
+}
+
+# This set contains all the operations that require the "rhs" condition to be resolved
+# in a "MetricConditionField". This solution is the simplest one and doesn't require any
+# changes in the transformer, however it requires this list to be discovered and updated
+# in case new operations are added, which is not ideal but given the fact that we already
+# define operations in this file, it is not a deal-breaker.
+REQUIRES_RHS_CONDITION_RESOLUTION = {"transform_null_to_unparameterized"}
+
+
+def require_rhs_condition_resolution(op: MetricOperationType) -> bool:
+    """
+    Checks whether a given operation requires its right operand to be resolved.
+    """
+    return op in REQUIRES_RHS_CONDITION_RESOLUTION
 
 
 def generate_operation_regex():
@@ -111,22 +171,40 @@ def generate_operation_regex():
 
 OP_REGEX = generate_operation_regex()
 
-
 AVAILABLE_OPERATIONS = {
     type_: sorted(mapping.keys()) for type_, mapping in OP_TO_SNUBA_FUNCTION.items()
+}
+AVAILABLE_GENERIC_OPERATIONS = {
+    type_: sorted(mapping.keys()) for type_, mapping in GENERIC_OP_TO_SNUBA_FUNCTION.items()
 }
 OPERATIONS_TO_ENTITY = {
     op: entity for entity, operations in AVAILABLE_OPERATIONS.items() for op in operations
 }
+GENERIC_OPERATIONS_TO_ENTITY = {
+    op: entity for entity, operations in AVAILABLE_GENERIC_OPERATIONS.items() for op in operations
+}
 
-# ToDo add guages/summaries
+# ToDo add gauges/summaries
 METRIC_TYPE_TO_ENTITY: Mapping[MetricType, EntityKey] = {
     "counter": EntityKey.MetricsCounters,
     "set": EntityKey.MetricsSets,
     "distribution": EntityKey.MetricsDistributions,
+    "generic_set": EntityKey.GenericMetricsSets,
+    "generic_distribution": EntityKey.GenericMetricsDistributions,
 }
 
 FIELD_ALIAS_MAPPINGS = {"project": "project_id"}
+NON_RESOLVABLE_TAG_VALUES = (
+    {"team_key_transaction"} | set(FIELD_ALIAS_MAPPINGS.keys()) | set(FIELD_ALIAS_MAPPINGS.values())
+)
+FILTERABLE_TAGS = {
+    "tags[environment]",
+    "tags[transaction]",
+    "tags[transaction.op]",
+    "tags[transaction.status]",
+    "tags[browser.name]",
+    "tags[os.name]",
+}
 
 
 class Tag(TypedDict):
@@ -143,6 +221,8 @@ class MetricMeta(TypedDict):
     type: MetricType
     operations: Collection[MetricOperationType]
     unit: Optional[MetricUnit]
+    metric_id: Optional[int]
+    mri_string: str
 
 
 class MetricMetaWithTagKeys(MetricMeta):
@@ -156,21 +236,32 @@ OPERATIONS_PERCENTILES = (
     "p95",
     "p99",
 )
-
-# ToDo Dynamically generate this from OP_TO_SNUBA_FUNCTION
-OPERATIONS = (
-    "avg",
-    "count_unique",
-    "count",
-    "max",
-    "sum",
+DERIVED_OPERATIONS = (
     "histogram",
-) + OPERATIONS_PERCENTILES
+    "rate",
+    "count_web_vitals",
+    "count_transaction_name",
+    "team_key_transaction",
+    "transform_null_to_unparameterized",
+)
+OPERATIONS = (
+    (
+        "avg",
+        "count_unique",
+        "count",
+        "max",
+        "min",
+        "sum",
+    )
+    + OPERATIONS_PERCENTILES
+    + DERIVED_OPERATIONS
+)
 
 DEFAULT_AGGREGATES: Dict[MetricOperationType, Optional[Union[int, List[Tuple[float]]]]] = {
     "avg": None,
     "count_unique": 0,
     "count": 0,
+    "min": None,
     "max": None,
     "p50": None,
     "p75": None,
@@ -179,10 +270,17 @@ DEFAULT_AGGREGATES: Dict[MetricOperationType, Optional[Union[int, List[Tuple[flo
     "p99": None,
     "sum": 0,
     "percentage": None,
-    "histogram": [],
 }
-UNIT_TO_TYPE = {"sessions": "count", "percentage": "percentage", "users": "count"}
+UNIT_TO_TYPE = {
+    "sessions": "count",
+    "percentage": "percentage",
+    "users": "count",
+}
 UNALLOWED_TAGS = {"session.status"}
+DATASET_COLUMNS = {"project_id", "metric_id"}
+
+# Custom measurements are always extracted as a distribution
+CUSTOM_MEASUREMENT_DATASETS = {"generic_distribution"}
 
 
 def combine_dictionary_of_list_values(main_dict, other_dict):
@@ -226,9 +324,15 @@ class OrderByNotSupportedOverCompositeEntityException(NotSupportedOverCompositeE
     ...
 
 
-def get_intervals(start: datetime, end: datetime, granularity: int):
-    assert granularity > 0
-    delta = timedelta(seconds=granularity)
+def get_intervals(start: datetime, end: datetime, granularity: int, interval: Optional[int] = None):
+    if interval is None:
+        assert granularity > 0
+        delta = timedelta(seconds=granularity)
+    else:
+        start = datetime.fromtimestamp(int(start.timestamp() / interval) * interval, timezone.utc)
+        end = datetime.fromtimestamp(int(end.timestamp() / interval) * interval, timezone.utc)
+        assert interval > 0
+        delta = timedelta(seconds=interval)
     while start < end:
         yield start
         start += delta

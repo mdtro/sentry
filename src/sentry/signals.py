@@ -1,6 +1,50 @@
+from __future__ import annotations
+
+import functools
 import logging
+import sys
+from typing import Any, Callable, List
 
 from django.dispatch.dispatcher import NO_RECEIVERS, Signal
+
+_all = object()
+_receivers_that_raise = []
+
+
+class receivers_raise_on_send:
+    """
+    Testing utility that forces send_robust to raise, rather than return, exceptions for signal receivers
+    that match the given receivers within the context.  The default receivers mode is to raise all receiver exceptions.
+
+    This behavior only works in tests.
+    """
+
+    receivers: Any
+
+    def __init__(self, receivers: Any | List[Any] = _all):
+        self.receivers = receivers
+
+    def __enter__(self) -> None:
+        global _receivers_that_raise
+        self.old = _receivers_that_raise
+
+        if self.receivers is _all:
+            _receivers_that_raise = self.receivers
+        else:
+            _receivers_that_raise += self.receivers
+
+    def __call__(self, f: Callable[..., Any]) -> Callable[..., Any]:
+        @functools.wraps(f)
+        def wrapped(*args: Any, **kwds: Any) -> Any:
+            with receivers_raise_on_send(self.receivers):
+                return f(*args, **kwds)
+
+        return wrapped
+
+    def __exit__(self, *args) -> bool | None:
+        global _receivers_that_raise
+        _receivers_that_raise = self.old
+        return None
 
 
 class BetterSignal(Signal):
@@ -42,6 +86,10 @@ class BetterSignal(Signal):
             try:
                 response = receiver(signal=self, sender=sender, **named)
             except Exception as err:
+                if "pytest" in sys.modules:
+                    if _receivers_that_raise is _all or receiver in _receivers_that_raise:
+                        raise
+
                 logging.error("signal.failure", extra={"receiver": repr(receiver)}, exc_info=True)
                 responses.append((receiver, err))
             else:
@@ -67,6 +115,8 @@ first_event_pending = BetterSignal(providing_args=["project", "user"])
 
 first_event_received = BetterSignal(providing_args=["project", "event"])
 first_transaction_received = BetterSignal(providing_args=["project", "event"])
+first_profile_received = BetterSignal(providing_args=["project"])
+first_replay_received = BetterSignal(providing_args=["project"])
 member_invited = BetterSignal(providing_args=["member", "user"])
 member_joined = BetterSignal(providing_args=["member", "organization"])
 issue_tracker_used = BetterSignal(providing_args=["plugin", "project", "user"])
@@ -102,8 +152,10 @@ repo_linked = BetterSignal(providing_args=["repo", "user"])
 release_created = BetterSignal(providing_args=["release"])
 deploy_created = BetterSignal(providing_args=["deploy"])
 ownership_rule_created = BetterSignal(providing_args=["project"])
-issue_assigned = BetterSignal(providing_args=["project", "group", "user"])
 
+# issues
+issue_assigned = BetterSignal(providing_args=["project", "group", "user"])
+issue_deleted = BetterSignal(providing_args=["group", "user", "delete_type"])
 issue_resolved = BetterSignal(
     providing_args=["organization_id", "project", "group", "user", "resolution_type"]
 )
@@ -111,6 +163,8 @@ issue_unresolved = BetterSignal(providing_args=["project", "user", "group", "tra
 issue_ignored = BetterSignal(providing_args=["project", "user", "group_list", "activity_data"])
 issue_unignored = BetterSignal(providing_args=["project", "user", "group", "transition_type"])
 issue_mark_reviewed = BetterSignal(providing_args=["project", "user", "group"])
+
+# comments
 comment_created = BetterSignal(providing_args=["project", "user", "group", "activity_data"])
 comment_updated = BetterSignal(providing_args=["project", "user", "group", "activity_data"])
 comment_deleted = BetterSignal(providing_args=["project", "user", "group", "activity_data"])
@@ -124,7 +178,6 @@ team_created = BetterSignal(providing_args=["organization", "user", "team"])
 integration_added = BetterSignal(providing_args=["integration", "organization", "user"])
 integration_issue_created = BetterSignal(providing_args=["integration", "organization", "user"])
 integration_issue_linked = BetterSignal(providing_args=["integration", "organization", "user"])
-issue_deleted = BetterSignal(providing_args=["group", "user", "delete_type"])
 
 monitor_failed = BetterSignal(providing_args=["monitor"])
 

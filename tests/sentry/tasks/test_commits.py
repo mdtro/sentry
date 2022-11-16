@@ -2,8 +2,8 @@ from unittest.mock import patch
 
 from django.core import mail
 
-from sentry.app import locks
 from sentry.exceptions import InvalidIdentity, PluginError
+from sentry.locks import locks
 from sentry.models import (
     Commit,
     Deploy,
@@ -15,6 +15,7 @@ from sentry.models import (
 )
 from sentry.tasks.commits import fetch_commits, handle_invalid_identity
 from sentry.testutils import TestCase
+from sentry.testutils.silo import control_silo_test
 from social_auth.models import UserSocialAuth
 
 
@@ -86,7 +87,7 @@ class FetchCommitsTest(TestCase):
         refs = [{"repository": repo.name, "commit": "b" * 40}]
         new_release = Release.objects.create(organization_id=org.id, version="12345678")
 
-        lock = locks.get(Release.get_lock_key(org.id, new_release.id), duration=10)
+        lock = locks.get(Release.get_lock_key(org.id, new_release.id), duration=10, name="release")
         lock.acquire()
 
         with self.tasks():
@@ -273,6 +274,7 @@ class FetchCommitsTest(TestCase):
         assert "Repository not found" in msg.body
 
 
+@control_silo_test
 class HandleInvalidIdentityTest(TestCase):
     def test_simple(self):
         usa = UserSocialAuth.objects.create(user=self.user, provider="dummy")

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict
 
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
-from sentry.db.models import BaseManager, FlexibleForeignKey, Model, sane_repr
+from sentry.db.models import (
+    BaseManager,
+    FlexibleForeignKey,
+    Model,
+    region_silo_only_model,
+    sane_repr,
+)
 from sentry.models.grouphistory import GroupHistoryStatus, record_group_history
 from sentry.notifications.types import GroupSubscriptionReason
 from sentry.signals import issue_assigned
@@ -15,29 +21,34 @@ from sentry.utils import metrics
 
 if TYPE_CHECKING:
     from sentry.models import ActorTuple, Group, Team, User
+    from sentry.services.hybrid_cloud.user import APIUser
 
 
 class GroupAssigneeManager(BaseManager):
     def assign(
         self,
         group: Group,
-        assigned_to: Team | User,
+        assigned_to: Team | APIUser,
         acting_user: User | None = None,
         create_only: bool = False,
+        extra: Dict[str, str] | None = None,
     ):
         from sentry import features
         from sentry.integrations.utils import sync_group_assignee_outbound
-        from sentry.models import Activity, GroupSubscription, Team, User
+        from sentry.models import Activity, GroupSubscription, Team
 
         GroupSubscription.objects.subscribe_actor(
             group=group, actor=assigned_to, reason=GroupSubscriptionReason.assigned
         )
 
-        if isinstance(assigned_to, User):
+        assigned_to_id = assigned_to.id
+        if assigned_to.class_name() == "User":
             assignee_type = "user"
+            assignee_type_attr = "user_id"
             other_type = "team"
         elif isinstance(assigned_to, Team):
             assignee_type = "team"
+            assignee_type_attr = "team_id"
             other_type = "user"
         else:
             raise AssertionError(f"Invalid type to assign to: {type(assigned_to)}")
@@ -45,29 +56,36 @@ class GroupAssigneeManager(BaseManager):
         now = timezone.now()
         assignee, created = self.get_or_create(
             group=group,
-            defaults={"project": group.project, assignee_type: assigned_to, "date_added": now},
+            defaults={
+                "project": group.project,
+                assignee_type_attr: assigned_to_id,
+                "date_added": now,
+            },
         )
 
         if not created:
             affected = not create_only and self.filter(group=group).exclude(
-                **{assignee_type: assigned_to}
-            ).update(**{assignee_type: assigned_to, other_type: None, "date_added": now})
+                **{assignee_type_attr: assigned_to_id}
+            ).update(**{assignee_type_attr: assigned_to_id, other_type: None, "date_added": now})
         else:
             affected = True
+
+        if affected:
             issue_assigned.send_robust(
                 project=group.project, group=group, user=acting_user, sender=self.__class__
             )
-
-        if affected:
+            data = {
+                "assignee": str(assigned_to.id),
+                "assigneeEmail": getattr(assigned_to, "email", None),
+                "assigneeType": assignee_type,
+            }
+            if extra:
+                data.update(extra)
             Activity.objects.create_group_activity(
                 group,
                 ActivityType.ASSIGNED,
                 user=acting_user,
-                data={
-                    "assignee": str(assigned_to.id),
-                    "assigneeEmail": getattr(assigned_to, "email", None),
-                    "assigneeType": assignee_type,
-                },
+                data=data,
             )
             record_group_history(group, GroupHistoryStatus.ASSIGNED, actor=acting_user)
 
@@ -100,6 +118,7 @@ class GroupAssigneeManager(BaseManager):
                 sync_group_assignee_outbound(group, None, assign=False)
 
 
+@region_silo_only_model
 class GroupAssignee(Model):
     """
     Identifies an assignment relationship between a user/team and an

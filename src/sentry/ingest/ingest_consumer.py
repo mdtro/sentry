@@ -300,6 +300,7 @@ def _load_event(
                     start_time=start_time,
                     event_id=event_id,
                     project=project,
+                    has_attachments=bool(attachments),
                 )
 
         # remember for an 1 hour that we saved this event (deduplication protection)
@@ -312,7 +313,8 @@ def _load_event(
 
 
 def _store_event(data) -> str:
-    return event_processing_store.store(data)
+    with metrics.timer("ingest_consumer._store_event"):
+        return event_processing_store.store(data)
 
 
 @trace_func(name="ingest_consumer.process_event")

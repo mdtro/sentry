@@ -6,9 +6,9 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import options
-from sentry.app import locks
 from sentry.exceptions import PluginError
 from sentry.integrations import FeatureDescription, IntegrationFeatures
+from sentry.locks import locks
 from sentry.models import Integration, Organization, OrganizationOption, Repository
 from sentry.plugins.bases.issue2 import IssueGroupActionEndpoint, IssuePlugin2
 from sentry.plugins.providers import RepositoryProvider
@@ -289,7 +289,9 @@ class GitHubRepositoryProvider(GitHubMixin, RepositoryProvider):
         return config
 
     def get_webhook_secret(self, organization):
-        lock = locks.get(f"github:webhook-secret:{organization.id}", duration=60)
+        lock = locks.get(
+            f"github:webhook-secret:{organization.id}", duration=60, name="github_webhook_secret"
+        )
         with lock.acquire():
             # TODO(dcramer): get_or_create would be a useful native solution
             secret = OrganizationOption.objects.get_value(

@@ -42,6 +42,8 @@ class NotificationSettingTypes(Enum):
 
     # Notifications for changes in assignment, resolution, comments, etc.
     WORKFLOW = 30
+    # Notification when an issue happens shortly after your release.
+    ACTIVE_RELEASE = 31
 
     # Notifications that require approval like a request to invite a member
     APPROVAL = 40
@@ -57,18 +59,27 @@ class NotificationSettingTypes(Enum):
     # Sub category of quotas for warnings before hitting the actual limit
     QUOTA_WARNINGS = 54
 
+    # Sub category of quotas for spend allocation notifications
+    QUOTA_SPEND_ALLOCATIONS = 55
+
+    # Notifications about spikes
+    SPIKE_PROTECTION = 60
+
 
 NOTIFICATION_SETTING_TYPES = {
     NotificationSettingTypes.DEFAULT: "default",
     NotificationSettingTypes.DEPLOY: "deploy",
     NotificationSettingTypes.ISSUE_ALERTS: "alerts",
     NotificationSettingTypes.WORKFLOW: "workflow",
+    NotificationSettingTypes.ACTIVE_RELEASE: "activeRelease",
     NotificationSettingTypes.APPROVAL: "approval",
     NotificationSettingTypes.QUOTA: "quota",
     NotificationSettingTypes.QUOTA_ERRORS: "quotaErrors",
     NotificationSettingTypes.QUOTA_TRANSACTIONS: "quotaTransactions",
     NotificationSettingTypes.QUOTA_ATTACHMENTS: "quotaAttachments",
     NotificationSettingTypes.QUOTA_WARNINGS: "quotaWarnings",
+    NotificationSettingTypes.QUOTA_SPEND_ALLOCATIONS: "quotaSpendAllocations",
+    NotificationSettingTypes.SPIKE_PROTECTION: "spikeProtection",
 }
 
 
@@ -128,6 +139,8 @@ class FineTuningAPIKey(Enum):
     QUOTA = "quota"
     REPORTS = "reports"
     WORKFLOW = "workflow"
+    ACTIVE_RELEASE = "activeRelease"
+    SPIKE_PROTECTION = "spikeProtection"
 
 
 class UserOptionsSettingsKey(Enum):
@@ -136,8 +149,10 @@ class UserOptionsSettingsKey(Enum):
     SELF_ASSIGN = "selfAssignOnResolve"
     SUBSCRIBE_BY_DEFAULT = "subscribeByDefault"
     WORKFLOW = "workflowNotifications"
+    ACTIVE_RELEASE = "activeReleaseNotifications"
     APPROVAL = "approvalNotifications"
     QUOTA = "quotaNotifications"
+    SPIKE_PROTECTION = "spikeProtectionNotifications"
 
 
 VALID_VALUES_FOR_KEY = {
@@ -174,9 +189,21 @@ VALID_VALUES_FOR_KEY = {
         NotificationSettingOptionValues.ALWAYS,
         NotificationSettingOptionValues.NEVER,
     },
+    NotificationSettingTypes.QUOTA_SPEND_ALLOCATIONS: {
+        NotificationSettingOptionValues.ALWAYS,
+        NotificationSettingOptionValues.NEVER,
+    },
     NotificationSettingTypes.WORKFLOW: {
         NotificationSettingOptionValues.ALWAYS,
         NotificationSettingOptionValues.SUBSCRIBE_ONLY,
+        NotificationSettingOptionValues.NEVER,
+    },
+    NotificationSettingTypes.ACTIVE_RELEASE: {
+        NotificationSettingOptionValues.ALWAYS,
+        NotificationSettingOptionValues.NEVER,
+    },
+    NotificationSettingTypes.SPIKE_PROTECTION: {
+        NotificationSettingOptionValues.ALWAYS,
         NotificationSettingOptionValues.NEVER,
     },
 }
@@ -224,12 +251,14 @@ class ActionTargetType(Enum):
     ISSUE_OWNERS = "IssueOwners"
     TEAM = "Team"
     MEMBER = "Member"
+    RELEASE_MEMBERS = "ReleaseMembers"
 
 
 ACTION_CHOICES = [
     (ActionTargetType.ISSUE_OWNERS.value, "Issue Owners"),
     (ActionTargetType.TEAM.value, "Team"),
     (ActionTargetType.MEMBER.value, "Member"),
+    (ActionTargetType.RELEASE_MEMBERS.value, "Release Members"),
 ]
 
 

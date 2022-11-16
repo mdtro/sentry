@@ -6,6 +6,7 @@ from django.urls import NoReverseMatch, reverse
 
 from sentry.testutils import APITestCase, SnubaTestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
 from sentry.utils.samples import load_data
 
 
@@ -123,7 +124,10 @@ class OrganizationEventsTraceEndpointBase(APITestCase, SnubaTestCase):
         # Second Generation
         self.gen2_span_ids = [uuid4().hex[:16] for _ in range(3)]
         self.gen2_project = self.create_project(organization=self.organization)
-        self.gen2_span_id = uuid4().hex[:16]
+
+        # Intentially pick a span id that starts with 0s
+        self.gen2_span_id = "0011" * 4
+
         self.gen2_events = [
             self.create_event(
                 trace=self.trace_id,
@@ -194,6 +198,7 @@ class OrganizationEventsTraceEndpointBase(APITestCase, SnubaTestCase):
         )
 
 
+@region_silo_test
 class OrganizationEventsTraceLightEndpointTest(OrganizationEventsTraceEndpointBase):
     url_name = "sentry-api-0-organization-events-trace-light"
 
@@ -614,6 +619,7 @@ class OrganizationEventsTraceLightEndpointTest(OrganizationEventsTraceEndpointBa
         assertions(response)
 
 
+@region_silo_test
 class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
     url_name = "sentry-api-0-organization-events-trace"
 
@@ -1141,6 +1147,7 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
                 assert len(gen1["children"]) == 0
 
 
+@region_silo_test
 class OrganizationEventsTraceMetaEndpointTest(OrganizationEventsTraceEndpointBase):
     url_name = "sentry-api-0-organization-events-trace-meta"
 

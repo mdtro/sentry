@@ -9,10 +9,13 @@ from sentry import roles
 from sentry.auth import manager
 from sentry.exceptions import UnableToAcceptMemberInvitationException
 from sentry.models import INVITE_DAYS_VALID, InviteStatus, OrganizationMember, OrganizationOption
+from sentry.models.authprovider import AuthProvider
 from sentry.testutils import TestCase
 from sentry.testutils.helpers import with_feature
+from sentry.testutils.silo import exempt_from_silo_limits, region_silo_test
 
 
+@region_silo_test(stable=True)
 class OrganizationMemberTest(TestCase):
     def test_legacy_token_generation(self):
         member = OrganizationMember(id=1, organization_id=1, email="foo@example.com")
@@ -55,9 +58,10 @@ class OrganizationMemberTest(TestCase):
 
     @patch("sentry.utils.email.MessageBuilder")
     def test_send_sso_unlink_email(self, builder):
-        user = self.create_user(email="foo@example.com")
-        user.password = ""
-        user.save()
+        with exempt_from_silo_limits():
+            user = self.create_user(email="foo@example.com")
+            user.password = ""
+            user.save()
 
         organization = self.create_organization()
         member = self.create_member(user=user, organization=organization)
@@ -134,6 +138,37 @@ class OrganizationMemberTest(TestCase):
         )
         OrganizationMember.objects.delete_expired(timezone.now())
         assert OrganizationMember.objects.filter(id=member.id).first() is None
+
+    def test_delete_expired_SCIM_enabled(self):
+        organization = self.create_organization()
+        org3 = self.create_organization()
+        with exempt_from_silo_limits():
+            AuthProvider.objects.create(
+                provider="saml2",
+                organization=organization,
+                flags=AuthProvider.flags["scim_enabled"],
+            )
+            AuthProvider.objects.create(
+                provider="saml2", organization=org3, flags=AuthProvider.flags["allow_unlinked"]
+            )
+        ninety_one_days = timezone.now() - timedelta(days=91)
+        member = OrganizationMember.objects.create(
+            organization=organization,
+            role="member",
+            email="test@example.com",
+            token="abc-def",
+            token_expires_at=ninety_one_days,
+        )
+        member2 = OrganizationMember.objects.create(
+            organization=org3,
+            role="member",
+            email="test2@example.com",
+            token="abc-defg",
+            token_expires_at=ninety_one_days,
+        )
+        OrganizationMember.objects.delete_expired(timezone.now())
+        assert OrganizationMember.objects.filter(id=member.id).exists()
+        assert not OrganizationMember.objects.filter(id=member2.id).exists()
 
     def test_delete_expired_miss(self):
         organization = self.create_organization()
@@ -329,10 +364,10 @@ class OrganizationMemberTest(TestCase):
         member.reject_member_invitation(user)
         assert not OrganizationMember.objects.filter(id=member.id).exists()
 
-    def test_get_allowed_roles_to_invite(self):
+    def test_get_allowed_org_roles_to_invite(self):
         member = OrganizationMember.objects.get(user=self.user, organization=self.organization)
         member.update(role="manager")
-        assert member.get_allowed_roles_to_invite() == [
+        assert member.get_allowed_org_roles_to_invite() == [
             roles.get("member"),
             roles.get("admin"),
             roles.get("manager"),

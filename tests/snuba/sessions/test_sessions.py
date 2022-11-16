@@ -2,17 +2,20 @@ import time
 from datetime import datetime, timedelta
 from datetime import timezone as dt_timezone
 
+import pytest
 import pytz
 from django.utils import timezone
 
 from sentry.release_health.base import OverviewStat
-from sentry.release_health.duplex import DuplexReleaseHealthBackend
 from sentry.release_health.metrics import MetricsReleaseHealthBackend
 from sentry.release_health.sessions import SessionsReleaseHealthBackend
 from sentry.snuba.dataset import EntityKey
 from sentry.snuba.sessions import _make_stats
 from sentry.testutils import SnubaTestCase, TestCase
-from sentry.testutils.cases import SessionMetricsTestCase
+from sentry.testutils.cases import BaseMetricsTestCase
+from sentry.testutils.silo import control_silo_test, region_silo_test
+
+pytestmark = pytest.mark.sentry_metrics
 
 
 def parametrize_backend(cls):
@@ -25,23 +28,13 @@ def parametrize_backend(cls):
     assert not hasattr(cls, "backend")
     cls.backend = SessionsReleaseHealthBackend()
 
-    class MetricsTest(SessionMetricsTestCase, cls):
+    class MetricsTest(BaseMetricsTestCase, cls):
         __doc__ = f"Repeat tests from {cls} with metrics"
         backend = MetricsReleaseHealthBackend()
 
     MetricsTest.__name__ = f"{cls.__name__}Metrics"
 
     globals()[MetricsTest.__name__] = MetricsTest
-
-    class DuplexTest(cls):
-        __doc__ = f"Repeat tests from {cls} with duplex backend"
-        backend = DuplexReleaseHealthBackend(
-            metrics_start=datetime.now(pytz.utc) - timedelta(days=120)
-        )
-
-    DuplexTest.__name__ = f"{cls.__name__}Duplex"
-
-    globals()[DuplexTest.__name__] = DuplexTest
 
     return cls
 
@@ -1016,6 +1009,7 @@ class GetCrashFreeRateTestCase(TestCase, SnubaTestCase):
         }
 
 
+@region_silo_test
 @parametrize_backend
 class GetProjectReleasesCountTest(TestCase, SnubaTestCase):
     def test_empty(self):
@@ -1434,6 +1428,7 @@ class CheckNumberOfSessions(TestCase, SnubaTestCase):
             assert set(actual) == {(p1.id, 4), (p2.id, 2)}
 
 
+@control_silo_test
 @parametrize_backend
 class InitWithoutUserTestCase(TestCase, SnubaTestCase):
     def setUp(self):

@@ -2,12 +2,13 @@ import styled from '@emotion/styled';
 import {Location} from 'history';
 
 import GuideAnchor from 'sentry/components/assistant/guideAnchor';
-import CompactSelect from 'sentry/components/forms/compactSelect';
+import CompactSelect from 'sentry/components/compactSelect';
 import {pickBarColor} from 'sentry/components/performance/waterfall/utils';
 import {IconFilter} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
 import {OrganizationSummary} from 'sentry/types';
+import {SpanOpBreakdown} from 'sentry/utils/fields';
 import {decodeScalar} from 'sentry/utils/queryString';
 
 import {decodeHistogramZoom} from './transactionOverview/latencyChart/utils';
@@ -19,15 +20,17 @@ export enum SpanOperationBreakdownFilter {
   Db = 'db',
   Browser = 'browser',
   Resource = 'resource',
+  Ui = 'ui',
 }
 
 export const SPAN_OPERATION_BREAKDOWN_FILTER_TO_FIELD: Partial<
   Record<SpanOperationBreakdownFilter, string>
 > = {
-  [SpanOperationBreakdownFilter.Http]: 'spans.http',
-  [SpanOperationBreakdownFilter.Db]: 'spans.db',
-  [SpanOperationBreakdownFilter.Browser]: 'spans.browser',
-  [SpanOperationBreakdownFilter.Resource]: 'spans.resource',
+  [SpanOperationBreakdownFilter.Http]: SpanOpBreakdown.SpansHttp,
+  [SpanOperationBreakdownFilter.Db]: SpanOpBreakdown.SpansDb,
+  [SpanOperationBreakdownFilter.Browser]: SpanOpBreakdown.SpansBrowser,
+  [SpanOperationBreakdownFilter.Resource]: SpanOpBreakdown.SpansResource,
+  [SpanOperationBreakdownFilter.Ui]: SpanOpBreakdown.SpansUi,
 };
 
 const OPTIONS: SpanOperationBreakdownFilter[] = [
@@ -35,6 +38,7 @@ const OPTIONS: SpanOperationBreakdownFilter[] = [
   SpanOperationBreakdownFilter.Db,
   SpanOperationBreakdownFilter.Browser,
   SpanOperationBreakdownFilter.Resource,
+  SpanOperationBreakdownFilter.Ui,
 ];
 
 export const spanOperationBreakdownSingleColumns = OPTIONS.map(o => `spans.${o}`);
@@ -46,11 +50,7 @@ type Props = {
 };
 
 function Filter(props: Props) {
-  const {currentFilter, onChangeFilter, organization} = props;
-
-  if (!organization.features.includes('performance-ops-breakdown')) {
-    return null;
-  }
+  const {currentFilter, onChangeFilter} = props;
 
   const menuOptions = OPTIONS.map(operationName => ({
     value: operationName,
@@ -66,7 +66,10 @@ function Filter(props: Props) {
         options={menuOptions}
         value={currentFilter}
         onChange={opt => onChangeFilter(opt?.value)}
-        triggerProps={{icon: <IconFilter />}}
+        triggerProps={{
+          icon: <IconFilter />,
+          'data-test-id': 'span-operation-breakdown-filter',
+        }}
         triggerLabel={
           currentFilter === SpanOperationBreakdownFilter.None
             ? t('Filter')

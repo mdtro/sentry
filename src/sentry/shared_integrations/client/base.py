@@ -31,11 +31,11 @@ class BaseApiClient(TrackResponseMixin):
 
     log_path: str | None = None
 
-    datadog_prefix: str | None = None
+    metrics_prefix: str | None = None
 
     cache_time = 900
 
-    page_size = 100
+    page_size: int = 100
 
     page_number_limit = 10
 
@@ -96,18 +96,18 @@ class BaseApiClient(TrackResponseMixin):
         full_url = self.build_url(path)
 
         metrics.incr(
-            f"{self.datadog_prefix}.http_request",
+            f"{self.metrics_prefix}.http_request",
             sample_rate=1.0,
-            tags={self.integration_type: self.name},
+            tags={str(self.integration_type): self.name},
         )
 
-        try:
-            with sentry_sdk.configure_scope() as scope:
-                parent_span_id = scope.span.span_id
-                trace_id = scope.span.trace_id
-        except AttributeError:
-            parent_span_id = None
-            trace_id = None
+        with sentry_sdk.configure_scope() as scope:
+            if scope.span is not None:
+                parent_span_id: str | None = scope.span.span_id
+                trace_id: str | None = scope.span.trace_id
+            else:
+                parent_span_id = None
+                trace_id = None
 
         with sentry_sdk.start_transaction(
             op=f"{self.integration_type}.http",
@@ -170,7 +170,7 @@ class BaseApiClient(TrackResponseMixin):
     def _get_cached(self, path: str, method: str, *args: Any, **kwargs: Any) -> BaseApiResponseX:
         query = ""
         if kwargs.get("params", None):
-            query = json.dumps(kwargs.get("params"), sort_keys=True)
+            query = json.dumps(kwargs.get("params"))
         key = self.get_cache_prefix() + md5_text(self.build_url(path), query).hexdigest()
 
         result: BaseApiResponseX | None = cache.get(key)

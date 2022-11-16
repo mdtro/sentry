@@ -17,7 +17,7 @@ from sentry.integrations import (
     IntegrationMetadata,
     IntegrationProvider,
 )
-from sentry.integrations.mixins import IssueSyncMixin, ResolveSyncAction
+from sentry.integrations.mixins.issues import MAX_CHAR, IssueSyncMixin, ResolveSyncAction
 from sentry.models import (
     ExternalIssue,
     IntegrationExternalProject,
@@ -32,11 +32,13 @@ from sentry.shared_integrations.exceptions import (
     IntegrationError,
     IntegrationFormError,
 )
-from sentry.utils.compat import filter
+from sentry.tasks.integrations import migrate_issues
+from sentry.types.issues import GroupCategory
 from sentry.utils.decorators import classproperty
 from sentry.utils.http import absolute_uri
+from sentry.utils.strings import truncatechars
 
-from .client import JiraApiClient, JiraCloud
+from .client import JiraCloudClient
 from .utils import build_user_choice
 
 logger = logging.getLogger("sentry.integrations.jira")
@@ -255,8 +257,10 @@ class JiraIntegration(IntegrationInstallation, IssueSyncMixin):
             # accidentally use newlines, so we explicitly handle that case. On page
             # refresh, they will see how it got interpreted as `get_config_data` will
             # re-serialize the config as a comma-separated list.
-            ignored_fields_list = filter(
-                None, [field.strip() for field in re.split(r"[,\n\r]+", ignored_fields_text)]
+            ignored_fields_list = list(
+                filter(
+                    None, [field.strip() for field in re.split(r"[,\n\r]+", ignored_fields_text)]
+                )
             )
             data[self.issues_ignored_fields_key] = ignored_fields_list
 
@@ -322,6 +326,19 @@ class JiraIntegration(IntegrationInstallation, IssueSyncMixin):
     def get_persisted_ignored_fields(self):
         return self.org_integration.config.get(self.issues_ignored_fields_key, [])
 
+    def get_performance_issue_body(self, event):
+        (
+            transaction_name,
+            parent_span,
+            num_repeating_spans,
+            repeating_spans,
+        ) = self.get_performance_issue_description_data(event)
+
+        body = f"| *Transaction Name* | {truncatechars(transaction_name, MAX_CHAR)} |\n"
+        body += f"| *Parent Span* | {truncatechars(parent_span, MAX_CHAR)} |\n"
+        body += f"| *Repeating Spans ({num_repeating_spans})* | {truncatechars(repeating_spans, MAX_CHAR)} |"
+        return body
+
     def get_group_description(self, group, event, **kwargs):
         output = [
             "Sentry Issue: [{}|{}]".format(
@@ -329,9 +346,15 @@ class JiraIntegration(IntegrationInstallation, IssueSyncMixin):
                 absolute_uri(group.get_absolute_url(params={"referrer": "jira_integration"})),
             )
         ]
-        body = self.get_group_body(group, event)
-        if body:
-            output.extend(["", "{code}", body, "{code}"])
+
+        if group.issue_category == GroupCategory.PERFORMANCE:
+            body = self.get_performance_issue_body(event)
+            output.extend([body])
+
+        else:
+            body = self.get_group_body(group, event)
+            if body:
+                output.extend(["", "{code}", body, "{code}"])
         return "\n".join(output)
 
     def get_client(self):
@@ -341,9 +364,9 @@ class JiraIntegration(IntegrationInstallation, IssueSyncMixin):
             logging_context["integration_id"] = attrgetter("org_integration.integration.id")(self)
             logging_context["org_integration_id"] = attrgetter("org_integration.id")(self)
 
-        return JiraApiClient(
+        return JiraCloudClient(
             self.model.metadata["base_url"],
-            JiraCloud(self.model.metadata["shared_secret"]),
+            self.model.metadata["shared_secret"],
             verify_ssl=True,
             logging_context=logging_context,
         )
@@ -955,6 +978,14 @@ class JiraIntegration(IntegrationInstallation, IssueSyncMixin):
         return ResolveSyncAction.from_resolve_unresolve(
             should_resolve=c_to in done_statuses and c_from not in done_statuses,
             should_unresolve=c_from in done_statuses and c_to not in done_statuses,
+        )
+
+    def migrate_issues(self):
+        migrate_issues.apply_async(
+            kwargs={
+                "integration_id": self.model.id,
+                "organization_id": self.organization_id,
+            }
         )
 
 

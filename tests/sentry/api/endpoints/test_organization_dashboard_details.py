@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from django.urls import reverse
 
 from sentry.models import (
@@ -8,7 +10,10 @@ from sentry.models import (
     DashboardWidgetQuery,
     DashboardWidgetTypes,
 )
+from sentry.models.project import Project
 from sentry.testutils import OrganizationDashboardWidgetTestCase
+from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
 
 
 class OrganizationDashboardDetailsTestCase(OrganizationDashboardWidgetTestCase):
@@ -76,6 +81,7 @@ class OrganizationDashboardDetailsTestCase(OrganizationDashboardWidgetTestCase):
         assert data["createdBy"]["id"] == str(dashboard.created_by.id)
 
 
+@region_silo_test
 class OrganizationDashboardDetailsGetTest(OrganizationDashboardDetailsTestCase):
     def test_get(self):
         response = self.do_request("get", self.url(self.dashboard.id))
@@ -133,7 +139,76 @@ class OrganizationDashboardDetailsGetTest(OrganizationDashboardDetailsTestCase):
         assert response.data["widgets"][0]["queries"][0]["fieldAliases"][0] == "Count Alias"
         assert response.data["widgets"][1]["queries"][0]["fieldAliases"] == []
 
+    def test_filters_is_empty_dict_in_response_if_not_applicable(self):
+        filters = {"environment": ["alpha"]}
+        dashboard = Dashboard.objects.create(
+            title="Dashboard With Filters",
+            created_by=self.user,
+            organization=self.organization,
+            filters=filters,
+        )
 
+        response = self.do_request("get", self.url(dashboard.id))
+        assert response.data["projects"] == []
+        assert response.data["environment"] == filters["environment"]
+        assert response.data["filters"] == {}
+        assert "period" not in response.data
+
+    def test_dashboard_filters_are_returned_in_response(self):
+        filters = {"environment": ["alpha"], "period": "24hr", "release": ["test-release"]}
+        dashboard = Dashboard.objects.create(
+            title="Dashboard With Filters",
+            created_by=self.user,
+            organization=self.organization,
+            filters=filters,
+        )
+        dashboard.projects.set([Project.objects.create(organization=self.organization)])
+
+        response = self.do_request("get", self.url(dashboard.id))
+        assert response.data["projects"] == list(dashboard.projects.values_list("id", flat=True))
+        assert response.data["environment"] == filters["environment"]
+        assert response.data["period"] == filters["period"]
+        assert response.data["filters"]["release"] == filters["release"]
+
+    def test_start_and_end_filters_are_returned_in_response(self):
+        start = iso_format(datetime.now() - timedelta(seconds=10))
+        end = iso_format(datetime.now())
+        filters = {"start": start, "end": end, "utc": False}
+        dashboard = Dashboard.objects.create(
+            title="Dashboard With Filters",
+            created_by=self.user,
+            organization=self.organization,
+            filters=filters,
+        )
+        dashboard.projects.set([Project.objects.create(organization=self.organization)])
+
+        response = self.do_request("get", self.url(dashboard.id))
+        assert iso_format(response.data["start"]) == start
+        assert iso_format(response.data["end"]) == end
+        assert not response.data["utc"]
+
+    def test_response_truncates_with_retention(self):
+        start = before_now(days=3)
+        end = before_now(days=2)
+        expected_adjusted_retention_start = before_now(days=1)
+        filters = {"start": start, "end": end}
+        dashboard = Dashboard.objects.create(
+            title="Dashboard With Filters",
+            created_by=self.user,
+            organization=self.organization,
+            filters=filters,
+        )
+
+        with self.options({"system.event-retention-days": 1}):
+            response = self.do_request("get", self.url(dashboard.id))
+
+        assert response.data["expired"]
+        assert iso_format(response.data["start"].replace(second=0)) == iso_format(
+            expected_adjusted_retention_start.replace(second=0)
+        )
+
+
+@region_silo_test
 class OrganizationDashboardDetailsDeleteTest(OrganizationDashboardDetailsTestCase):
     def test_delete(self):
         response = self.do_request("delete", self.url(self.dashboard.id))
@@ -186,6 +261,7 @@ class OrganizationDashboardDetailsDeleteTest(OrganizationDashboardDetailsTestCas
             assert response.status_code == 404
 
 
+@region_silo_test
 class OrganizationDashboardDetailsPutTest(OrganizationDashboardDetailsTestCase):
     def setUp(self):
         super().setUp()
@@ -1281,7 +1357,91 @@ class OrganizationDashboardDetailsPutTest(OrganizationDashboardDetailsTestCase):
         response = self.do_request("put", self.url(self.dashboard.id), data=data)
         assert response.status_code == 200, response.data
 
+    def test_update_dashboard_with_filters(self):
+        project1 = self.create_project(name="foo", organization=self.organization)
+        project2 = self.create_project(name="bar", organization=self.organization)
+        data = {
+            "title": "First dashboard",
+            "projects": [project1.id, project2.id],
+            "environment": ["alpha"],
+            "period": "7d",
+            "filters": {"release": ["v1"]},
+        }
 
+        response = self.do_request("put", self.url(self.dashboard.id), data=data)
+        assert response.status_code == 200, response.data
+        assert sorted(response.data["projects"]) == [project1.id, project2.id]
+        assert response.data["environment"] == ["alpha"]
+        assert response.data["period"] == "7d"
+        assert response.data["filters"]["release"] == ["v1"]
+
+    def test_update_dashboard_with_invalid_project_filter(self):
+        other_project = self.create_project(name="other", organization=self.create_organization())
+        data = {
+            "title": "First dashboard",
+            "projects": [other_project.id],
+        }
+
+        response = self.do_request("put", self.url(self.dashboard.id), data=data)
+        assert response.status_code == 403, response.data
+
+    def test_update_dashboard_with_all_projects(self):
+        data = {
+            "title": "First dashboard",
+            "projects": [-1],
+        }
+
+        response = self.do_request("put", self.url(self.dashboard.id), data=data)
+        assert response.status_code == 200, response.data
+        assert response.data["projects"] == [-1]
+
+    def test_update_dashboard_with_my_projects_after_setting_all_projects(self):
+        dashboard = Dashboard.objects.create(
+            title="Dashboard With Filters",
+            created_by=self.user,
+            organization=self.organization,
+            filters={"all_projects": True},
+        )
+        data = {
+            "title": "First dashboard",
+            "projects": [],
+        }
+
+        response = self.do_request("put", self.url(dashboard.id), data=data)
+        assert response.status_code == 200, response.data
+        assert response.data["projects"] == []
+
+    def test_update_dashboard_with_more_widgets_than_max(self):
+        data = {
+            "title": "Too many widgets",
+            "widgets": [
+                {
+                    "displayType": "line",
+                    "interval": "5m",
+                    "title": f"Widget {i}",
+                    "queries": [
+                        {
+                            "name": "Transactions",
+                            "fields": ["count()"],
+                            "columns": ["transaction"],
+                            "aggregates": ["count()"],
+                            "conditions": "event.type:transaction",
+                        }
+                    ],
+                    "layout": {"x": 0, "y": 0, "w": 1, "h": 1, "minH": 2},
+                }
+                for i in range(Dashboard.MAX_WIDGETS + 1)
+            ],
+        }
+        response = self.do_request("put", self.url(self.dashboard.id), data=data)
+        assert response.status_code == 400, response.data
+        assert (
+            f"Number of widgets must be less than {Dashboard.MAX_WIDGETS}"
+            in response.content.decode()
+        )
+
+
+@region_silo_test
 class OrganizationDashboardVisitTest(OrganizationDashboardDetailsTestCase):
     def url(self, dashboard_id):
         return reverse(

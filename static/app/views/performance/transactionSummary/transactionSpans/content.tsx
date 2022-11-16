@@ -4,10 +4,10 @@ import styled from '@emotion/styled';
 import {Location} from 'history';
 import omit from 'lodash/omit';
 
+import CompactSelect from 'sentry/components/compactSelect';
 import DatePageFilter from 'sentry/components/datePageFilter';
 import EnvironmentPageFilter from 'sentry/components/environmentPageFilter';
 import SearchBar from 'sentry/components/events/searchBar';
-import CompactSelect from 'sentry/components/forms/compactSelect';
 import * as Layout from 'sentry/components/layouts/thirds';
 import PageFilterBar from 'sentry/components/organizations/pageFilterBar';
 import {normalizeDateTimeParams} from 'sentry/components/organizations/pageFilters/parse';
@@ -30,6 +30,8 @@ import {SpanSort, SpansTotalValues} from './types';
 import {
   getSuspectSpanSortFromEventView,
   getTotalsView,
+  SPAN_RELATIVE_PERIODS,
+  SPAN_RETENTION_DAYS,
   SPAN_SORT_OPTIONS,
   SPAN_SORT_TO_FIELDS,
 } from './utils';
@@ -103,7 +105,11 @@ function SpansContent(props: Props) {
         />
         <PageFilterBar condensed>
           <EnvironmentPageFilter />
-          <DatePageFilter alignDropdown="left" />
+          <DatePageFilter
+            alignDropdown="left"
+            maxPickableDays={SPAN_RETENTION_DAYS}
+            relativeOptions={SPAN_RELATIVE_PERIODS}
+          />
         </PageFilterBar>
         <StyledSearchBar
           organization={organization}

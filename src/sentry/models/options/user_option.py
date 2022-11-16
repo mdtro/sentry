@@ -5,12 +5,13 @@ from typing import TYPE_CHECKING, Any, Mapping
 from django.conf import settings
 from django.db import models
 
-from sentry.db.models import FlexibleForeignKey, Model, sane_repr
-from sentry.db.models.fields import EncryptedPickledObjectField
+from sentry.db.models import FlexibleForeignKey, Model, control_silo_only_model, sane_repr
+from sentry.db.models.fields import PickledObjectField
 from sentry.db.models.manager import OptionManager, Value
 
 if TYPE_CHECKING:
     from sentry.models import Organization, Project, User
+    from sentry.services.hybrid_cloud.user import APIUser
 
 
 option_scope_error = "this is not a supported use case, scope to project OR organization"
@@ -19,7 +20,7 @@ option_scope_error = "this is not a supported use case, scope to project OR orga
 class UserOptionManager(OptionManager["User"]):
     def _make_key(
         self,
-        user: User,
+        user: User | APIUser,
         project: Project | None = None,
         organization: Organization | None = None,
     ) -> str:
@@ -34,7 +35,9 @@ class UserOptionManager(OptionManager["User"]):
         key: str = super()._make_key(metakey)
         return key
 
-    def get_value(self, user: User, key: str, default: Value | None = None, **kwargs: Any) -> Value:
+    def get_value(
+        self, user: User | APIUser, key: str, default: Value | None = None, **kwargs: Any
+    ) -> Value:
         project = kwargs.get("project")
         organization = kwargs.get("organization")
 
@@ -86,7 +89,7 @@ class UserOptionManager(OptionManager["User"]):
 
     def get_all_values(
         self,
-        user: User,
+        user: User | APIUser,
         project: Project | None = None,
         organization: Organization | None = None,
         force_reload: bool = False,
@@ -99,7 +102,7 @@ class UserOptionManager(OptionManager["User"]):
         if metakey not in self._option_cache or force_reload:
             result = {
                 i.key: i.value
-                for i in self.filter(user=user, project=project, organization=organization)
+                for i in self.filter(user_id=user.id, project=project, organization=organization)
             }
             self._option_cache[metakey] = result
 
@@ -120,6 +123,7 @@ class UserOptionManager(OptionManager["User"]):
 
 # TODO(dcramer): the NULL UNIQUE constraint here isn't valid, and instead has to
 # be manually replaced in the database. We should restructure this model.
+@control_silo_only_model
 class UserOption(Model):  # type: ignore
     """
     User options apply only to a user, and optionally a project OR an organization.
@@ -175,7 +179,7 @@ class UserOption(Model):  # type: ignore
     project = FlexibleForeignKey("sentry.Project", null=True)
     organization = FlexibleForeignKey("sentry.Organization", null=True)
     key = models.CharField(max_length=64)
-    value = EncryptedPickledObjectField()
+    value = PickledObjectField()
 
     objects = UserOptionManager()
 

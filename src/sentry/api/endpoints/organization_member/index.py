@@ -1,3 +1,5 @@
+from typing import List, Tuple
+
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F, Q
@@ -6,21 +8,23 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import audit_log, features, ratelimits, roles
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.organization import OrganizationEndpoint, OrganizationPermission
 from sentry.api.paginator import OffsetPaginator
 from sentry.api.serializers import serialize
 from sentry.api.serializers.models import organization_member as organization_member_serializers
 from sentry.api.serializers.rest_framework import ListField
 from sentry.api.validators import AllowedEmailField
-from sentry.app import locks
+from sentry.locks import locks
 from sentry.models import ExternalActor, InviteStatus, OrganizationMember, Team, TeamStatus
 from sentry.models.authenticator import available_authenticators
+from sentry.roles import organization_roles, team_roles
 from sentry.search.utils import tokenize_query
 from sentry.signals import member_invited
 from sentry.utils import metrics
 from sentry.utils.retries import TimedRetryPolicy
 
-from . import get_allowed_roles, save_team_assignments
+from . import get_allowed_org_roles, save_team_assignments
 
 ERR_RATE_LIMITED = "You are being rate limited for too many invitations."
 
@@ -40,8 +44,14 @@ class MemberConflictValidationError(serializers.ValidationError):
 
 class OrganizationMemberSerializer(serializers.Serializer):
     email = AllowedEmailField(max_length=75, required=True)
-    role = serializers.ChoiceField(choices=roles.get_choices(), required=True)
-    teams = ListField(required=False, allow_null=False, default=[])
+    role = serializers.ChoiceField(
+        choices=roles.get_choices(), default=organization_roles.get_default().id
+    )  # deprecated, use orgRole
+    orgRole = serializers.ChoiceField(
+        choices=roles.get_choices(), default=organization_roles.get_default().id
+    )
+    teams = ListField(required=False, allow_null=False, default=[])  # deprecated, use teamRoles
+    teamRoles = ListField(required=False, allow_null=True, default=[])
     sendInvite = serializers.BooleanField(required=False, default=True, write_only=True)
 
     def validate_email(self, email):
@@ -63,6 +73,21 @@ class OrganizationMemberSerializer(serializers.Serializer):
                 )
         return email
 
+    def validate_role(self, role):
+        return self.validate_orgRole(role)
+
+    def validate_orgRole(self, role):
+        if features.has("organizations:team-roles", self.context["organization"]):
+            if role in {r.id for r in organization_roles.get_all() if r.is_retired}:
+                raise serializers.ValidationError("This org-level role has been deprecated")
+
+        if role not in {r.id for r in self.context["allowed_roles"]}:
+            raise serializers.ValidationError(
+                "You do not have permission to set that org-level role"
+            )
+
+        return role
+
     def validate_teams(self, teams):
         valid_teams = list(
             Team.objects.filter(
@@ -75,13 +100,26 @@ class OrganizationMemberSerializer(serializers.Serializer):
 
         return valid_teams
 
-    def validate_role(self, role):
-        if role not in {r.id for r in self.context["allowed_roles"]}:
-            raise serializers.ValidationError("You do not have permission to invite that role.")
+    def validate_teamRoles(self, teamRoles) -> List[Tuple[Team, str]]:
+        roles = {item["role"] for item in teamRoles}
+        valid_roles = [r.id for r in team_roles.get_all()] + [None]
+        if roles.difference(valid_roles):
+            raise serializers.ValidationError(
+                "You do not have permission to set that team-level role"
+            )
 
-        return role
+        team_slugs = [item["teamSlug"] for item in teamRoles]
+        valid_teams = self.validate_teams(team_slugs)
+
+        # Avoids O(n * n) search
+        team_role_map = {item["teamSlug"]: item["role"] for item in teamRoles}
+        # TODO(dlee): Check if they have permissions to assign team role for each team
+        valid_team_roles = [(team, team_role_map[team.slug]) for team in valid_teams]
+
+        return valid_team_roles
 
 
+@region_silo_endpoint
 class OrganizationMemberIndexEndpoint(OrganizationEndpoint):
     permission_classes = (MemberPermission,)
 
@@ -193,7 +231,7 @@ class OrganizationMemberIndexEndpoint(OrganizationEndpoint):
                 {"organization": "Your organization is not allowed to invite members"}, status=403
             )
 
-        allowed_roles = get_allowed_roles(request, organization)
+        allowed_roles = get_allowed_org_roles(request, organization)
 
         serializer = OrganizationMemberSerializer(
             data=request.data,
@@ -244,7 +282,7 @@ class OrganizationMemberIndexEndpoint(OrganizationEndpoint):
             om.save()
 
         if result["teams"]:
-            lock = locks.get(f"org:member:{om.id}", duration=5)
+            lock = locks.get(f"org:member:{om.id}", duration=5, name="org_member")
             with TimedRetryPolicy(10)(lock.acquire):
                 save_team_assignments(om, result["teams"])
 

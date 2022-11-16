@@ -26,6 +26,8 @@ import {
 } from 'sentry/types';
 import {Event} from 'sentry/types/event';
 import fetchSentryAppInstallations from 'sentry/utils/fetchSentryAppInstallations';
+import {QuickTraceContext} from 'sentry/utils/performance/quickTrace/quickTraceContext';
+import QuickTraceQuery from 'sentry/utils/performance/quickTrace/quickTraceQuery';
 
 import GroupEventToolbar from '../eventToolbar';
 import ReprocessingProgress from '../reprocessingProgress';
@@ -134,16 +136,6 @@ class GroupEventDetails extends Component<GroupEventDetailsProps, State> {
     this.setState({releasesCompletion});
   };
 
-  get showExampleCommit() {
-    return (
-      this.props.project?.isMember &&
-      this.props.project?.firstEvent &&
-      this.state.releasesCompletion?.some(
-        ({step, complete}) => step === 'commit' && !complete
-      )
-    );
-  }
-
   renderContent(eventWithMeta?: Event) {
     const {
       group,
@@ -175,7 +167,6 @@ class GroupEventDetails extends Component<GroupEventDetailsProps, State> {
         organization={organization}
         project={project}
         location={location}
-        showExampleCommit={this.showExampleCommit}
         router={router}
         route={route}
       />
@@ -219,12 +210,14 @@ class GroupEventDetails extends Component<GroupEventDetailsProps, State> {
       groupReprocessingStatus,
     } = this.props;
 
-    const eventWithMeta = withMeta(event) as Event;
+    const eventWithMeta = withMeta(event);
 
     // Reprocessing
     const hasReprocessingV2Feature = organization.features?.includes('reprocessing-v2');
     const {activity: activities} = group;
     const mostRecentActivity = getGroupMostRecentActivity(activities);
+
+    const hasReplay = Boolean(event?.tags?.find(({key}) => key === 'replayId')?.value);
 
     return (
       <div className={className} data-test-id="group-event-details">
@@ -240,34 +233,48 @@ class GroupEventDetails extends Component<GroupEventDetailsProps, State> {
             />
           ) : (
             <Fragment>
-              <StyledLayoutMain>
-                {eventWithMeta && (
-                  <GroupEventToolbar
-                    group={group}
-                    event={eventWithMeta}
-                    organization={organization}
-                    location={location}
-                    project={project}
-                  />
-                )}
-                <Wrapper>
-                  {group.status === 'ignored' && (
-                    <MutedBox statusDetails={group.statusDetails} />
-                  )}
-                  {group.status === 'resolved' && (
-                    <ResolutionBox
-                      statusDetails={group.statusDetails}
-                      activities={activities}
-                      projectId={project.id}
-                    />
-                  )}
-                  {this.renderReprocessedBox(
-                    groupReprocessingStatus,
-                    mostRecentActivity as GroupActivityReprocess
-                  )}
-                </Wrapper>
-                {this.renderContent(eventWithMeta)}
-              </StyledLayoutMain>
+              <QuickTraceQuery
+                event={eventWithMeta}
+                location={location}
+                orgSlug={organization.slug}
+              >
+                {results => {
+                  return (
+                    <StyledLayoutMain>
+                      <QuickTraceContext.Provider value={results}>
+                        {eventWithMeta && (
+                          <GroupEventToolbar
+                            group={group}
+                            event={eventWithMeta}
+                            organization={organization}
+                            location={location}
+                            project={project}
+                            hasReplay={hasReplay}
+                          />
+                        )}
+                        <Wrapper>
+                          {group.status === 'ignored' && (
+                            <MutedBox statusDetails={group.statusDetails} />
+                          )}
+                          {group.status === 'resolved' && (
+                            <ResolutionBox
+                              statusDetails={group.statusDetails}
+                              activities={activities}
+                              projectId={project.id}
+                            />
+                          )}
+                          {this.renderReprocessedBox(
+                            groupReprocessingStatus,
+                            mostRecentActivity as GroupActivityReprocess
+                          )}
+                        </Wrapper>
+                        {this.renderContent(eventWithMeta)}
+                      </QuickTraceContext.Provider>
+                    </StyledLayoutMain>
+                  );
+                }}
+              </QuickTraceQuery>
+
               <StyledLayoutSide>
                 <GroupSidebar
                   organization={organization}
@@ -288,6 +295,9 @@ class GroupEventDetails extends Component<GroupEventDetailsProps, State> {
 const StyledLayoutBody = styled(Layout.Body)`
   /* Makes the borders align correctly */
   padding: 0 !important;
+  @media (min-width: ${p => p.theme.breakpoints.large}) {
+    align-content: stretch;
+  }
 `;
 
 const Wrapper = styled('div')`
@@ -295,6 +305,12 @@ const Wrapper = styled('div')`
 `;
 
 const StyledLayoutMain = styled(Layout.Main)`
+  padding-top: ${space(2)};
+
+  @media (max-width: ${p => p.theme.breakpoints.medium}) {
+    padding-top: ${space(1)};
+  }
+
   @media (min-width: ${p => p.theme.breakpoints.large}) {
     border-right: 1px solid ${p => p.theme.border};
     padding-right: 0;

@@ -1,21 +1,20 @@
 import {Fragment, useEffect, useRef, useState} from 'react';
+// eslint-disable-next-line no-restricted-imports
 import {withRouter, WithRouterProps} from 'react-router';
 import {ClassNames} from '@emotion/react';
 import styled from '@emotion/styled';
 import isEqual from 'lodash/isEqual';
 import sortBy from 'lodash/sortBy';
 
+import {MenuActions} from 'sentry/components/deprecatedDropdownMenu';
 import DropdownAutoComplete from 'sentry/components/dropdownAutoComplete';
 import {MenuFooterChildProps} from 'sentry/components/dropdownAutoComplete/menu';
 import {Item} from 'sentry/components/dropdownAutoComplete/types';
-import {MenuActions} from 'sentry/components/dropdownMenu';
 import Highlight from 'sentry/components/highlight';
-import HeaderItem from 'sentry/components/organizations/headerItem';
 import MultipleSelectorSubmitRow from 'sentry/components/organizations/multipleSelectorSubmitRow';
 import PageFilterRow from 'sentry/components/organizations/pageFilterRow';
 import PageFilterPinButton from 'sentry/components/organizations/pageFilters/pageFilterPinButton';
 import {ALL_ACCESS_PROJECTS} from 'sentry/constants/pageFilters';
-import {IconWindow} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import ConfigStore from 'sentry/stores/configStore';
 import space from 'sentry/styles/space';
@@ -25,6 +24,12 @@ import getRouteStringFromRoutes from 'sentry/utils/getRouteStringFromRoutes';
 import theme from 'sentry/utils/theme';
 
 type Props = WithRouterProps & {
+  customDropdownButton: (config: {
+    actions: MenuActions;
+    isOpen: boolean;
+    value: string[];
+  }) => React.ReactElement;
+  customLoadingIndicator: React.ReactNode;
   loadingProjects: boolean;
   /**
    * When menu is closed
@@ -41,18 +46,7 @@ type Props = WithRouterProps & {
    * Aligns dropdown menu to left or right of button
    */
   alignDropdown?: 'left' | 'right';
-  customDropdownButton?: (config: {
-    actions: MenuActions;
-    isOpen: boolean;
-    value: string[];
-  }) => React.ReactElement;
-  customLoadingIndicator?: React.ReactNode;
-  detached?: boolean;
-  forceEnvironment?: string;
-  /**
-   * Show the pin button in the dropdown's header actions
-   */
-  showPin?: boolean;
+  disabled?: boolean;
 };
 
 /**
@@ -70,18 +64,18 @@ function EnvironmentSelector({
   alignDropdown,
   customDropdownButton,
   customLoadingIndicator,
-  detached,
-  forceEnvironment,
+  disabled,
   router,
-  showPin,
 }: Props) {
   const [selectedEnvs, setSelectedEnvs] = useState(value);
   const hasChanges = !isEqual(selectedEnvs, value);
 
   // Update selected envs value on change
   useEffect(() => {
-    setSelectedEnvs(value);
-    lastSelectedEnvs.current = selectedEnvs;
+    setSelectedEnvs(previousSelectedEnvs => {
+      lastSelectedEnvs.current = previousSelectedEnvs;
+      return value;
+    });
   }, [value]);
 
   // We keep a separate list of selected environments to use for sorting. This
@@ -132,19 +126,6 @@ function EnvironmentSelector({
     onUpdate(selectedEnvs);
   };
 
-  /**
-   * Clears all selected environments and updates
-   */
-  const handleClear = () => {
-    analytics('environmentselector.clear', {
-      path: getRouteStringFromRoutes(router.routes),
-      org_id: parseInt(organization.id, 10),
-    });
-
-    setSelectedEnvs([]);
-    onUpdate([]);
-  };
-
   const handleQuickSelect = (item: Item) => {
     analytics('environmentselector.direct_selection', {
       path: getRouteStringFromRoutes(router.routes),
@@ -161,7 +142,7 @@ function EnvironmentSelector({
     didQuickSelect.current = true;
   };
 
-  const config = ConfigStore.getConfig();
+  const {user} = ConfigStore.getState();
 
   const unsortedEnvironments = projects.flatMap(project => {
     const projectId = parseInt(project.id, 10);
@@ -174,7 +155,7 @@ function EnvironmentSelector({
       (selectedProjects.length === 1 &&
         selectedProjects[0] === ALL_ACCESS_PROJECTS &&
         project.hasAccess) ||
-      (selectedProjects.length === 0 && (project.isMember || config.user.isSuperuser)) ||
+      (selectedProjects.length === 0 && (project.isMember || user.isSuperuser)) ||
       selectedProjects.includes(projectId)
     ) {
       return project.environments;
@@ -192,41 +173,9 @@ function EnvironmentSelector({
   ]);
 
   const validatedValue = value.filter(env => environments.includes(env));
-  const summary = validatedValue.length
-    ? `${validatedValue.join(', ')}`
-    : t('All Environments');
-
-  if (forceEnvironment !== undefined) {
-    return (
-      <StyledHeaderItem
-        data-test-id="page-filter-environment-selector"
-        icon={<IconWindow />}
-        isOpen={false}
-        locked
-      >
-        {forceEnvironment ? forceEnvironment : t('All Environments')}
-      </StyledHeaderItem>
-    );
-  }
-
-  if (loadingProjects && customLoadingIndicator) {
-    return <Fragment>{customLoadingIndicator}</Fragment>;
-  }
 
   if (loadingProjects) {
-    return (
-      <StyledHeaderItem
-        data-test-id="page-filter-environment-selector"
-        icon={<IconWindow />}
-        loading={loadingProjects}
-        hasChanges={false}
-        hasSelected={false}
-        isOpen={false}
-        locked={false}
-      >
-        {t('Loading\u2026')}
-      </StyledHeaderItem>
-    );
+    return <Fragment>{customLoadingIndicator}</Fragment>;
   }
 
   return (
@@ -237,7 +186,8 @@ function EnvironmentSelector({
           allowActorToggle
           closeOnSelect
           blendCorner={false}
-          detached={detached}
+          detached
+          disabled={disabled}
           searchPlaceholder={t('Filter environments')}
           onSelect={handleQuickSelect}
           onClose={handleMenuClose}
@@ -252,7 +202,11 @@ function EnvironmentSelector({
           virtualizedHeight={theme.headerSelectorRowHeight}
           emptyHidesInput
           inputActions={
-            showPin ? <StyledPinButton size="xsmall" filter="environments" /> : undefined
+            <StyledPinButton
+              organization={organization}
+              filter="environments"
+              size="xs"
+            />
           }
           menuFooter={({actions}) =>
             hasChanges ? (
@@ -277,22 +231,7 @@ function EnvironmentSelector({
           }))}
         >
           {({isOpen, actions}) =>
-            customDropdownButton ? (
-              customDropdownButton({isOpen, actions, value: validatedValue})
-            ) : (
-              <StyledHeaderItem
-                data-test-id="page-filter-environment-selector"
-                icon={<IconWindow />}
-                isOpen={isOpen}
-                hasSelected={value && !!value.length}
-                onClear={handleClear}
-                hasChanges={false}
-                locked={false}
-                loading={false}
-              >
-                {summary}
-              </StyledHeaderItem>
-            )
+            customDropdownButton({isOpen, actions, value: validatedValue})
           }
         </StyledDropdownAutoComplete>
       )}
@@ -301,11 +240,6 @@ function EnvironmentSelector({
 }
 
 export default withRouter(EnvironmentSelector);
-
-const StyledHeaderItem = styled(HeaderItem)`
-  height: 100%;
-  width: 100%;
-`;
 
 const StyledDropdownAutoComplete = styled(DropdownAutoComplete)`
   background: ${p => p.theme.background};

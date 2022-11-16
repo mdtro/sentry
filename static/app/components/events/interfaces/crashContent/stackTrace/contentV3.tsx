@@ -1,8 +1,9 @@
 import {cloneElement, Fragment, useState} from 'react';
 import styled from '@emotion/styled';
 
-import {Panel} from 'sentry/components/panels';
+import Panel from 'sentry/components/panels/panel';
 import {t} from 'sentry/locale';
+import space from 'sentry/styles/space';
 import {Frame, Group, PlatformType} from 'sentry/types';
 import {Event} from 'sentry/types/event';
 import {StacktraceType} from 'sentry/types/stacktrace';
@@ -18,6 +19,7 @@ type Props = {
   groupingCurrentLevel?: Group['metadata']['current_level'];
   includeSystemFrames?: boolean;
   isHoverPreviewed?: boolean;
+  meta?: Record<any, any>;
   newestFirst?: boolean;
 };
 
@@ -30,6 +32,7 @@ function Content({
   groupingCurrentLevel,
   includeSystemFrames = true,
   expandFirstFrame = true,
+  meta,
 }: Props) {
   const [showingAbsoluteAddresses, setShowingAbsoluteAddresses] = useState(false);
   const [showCompleteFunctionName, setShowCompleteFunctionName] = useState(false);
@@ -177,6 +180,8 @@ function Content({
           showCompleteFunctionName,
           isHoverPreviewed,
           isUsedForGrouping,
+          frameMeta: meta?.frames?.[frameIndex],
+          registersMeta: meta?.registers,
         };
 
         nRepeats = 0;
@@ -205,6 +210,10 @@ function Content({
     })
     .filter(frame => !!frame) as React.ReactElement[];
 
+  const className = `traceback ${
+    includeSystemFrames ? 'full-traceback' : 'in-app-traceback'
+  }`;
+
   if (convertedFrames.length > 0 && registers) {
     const lastFrame = convertedFrames.length - 1;
     convertedFrames[lastFrame] = cloneElement(convertedFrames[lastFrame], {
@@ -212,22 +221,40 @@ function Content({
     });
 
     return (
-      <Wrapper isHoverPreviewed={isHoverPreviewed} data-test-id="stack-trace">
-        {!newestFirst ? convertedFrames : [...convertedFrames].reverse()}
+      <Wrapper className={className}>
+        <Frames isHoverPreviewed={isHoverPreviewed} data-test-id="stack-trace">
+          {!newestFirst ? convertedFrames : [...convertedFrames].reverse()}
+        </Frames>
       </Wrapper>
     );
   }
 
   return (
-    <Wrapper isHoverPreviewed={isHoverPreviewed} data-test-id="stack-trace">
-      {!newestFirst ? convertedFrames : [...convertedFrames].reverse()}
+    <Wrapper className={className}>
+      <Frames isHoverPreviewed={isHoverPreviewed} data-test-id="stack-trace">
+        {!newestFirst ? convertedFrames : [...convertedFrames].reverse()}
+      </Frames>
     </Wrapper>
   );
 }
 
 export default Content;
 
-const Wrapper = styled(Panel)<{isHoverPreviewed?: boolean}>`
+const Wrapper = styled(Panel)`
+  && {
+    border-top-left-radius: 0;
+    position: relative;
+    border: 0;
+  }
+`;
+
+const Frames = styled('ul')<{isHoverPreviewed?: boolean}>`
+  background: ${p => p.theme.background};
+  border-radius: ${p => p.theme.borderRadius};
+  border: 1px ${p => 'solid ' + p.theme.border};
+  box-shadow: ${p => p.theme.dropShadowLight};
+  margin-bottom: ${space(2)};
+  position: relative;
   display: grid;
   overflow: hidden;
   font-size: ${p => p.theme.fontSizeSmall};

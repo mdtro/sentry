@@ -11,6 +11,7 @@ from sentry.notifications.notifications.strategies.role_based_recipient_strategy
     RoleBasedRecipientStrategy,
 )
 from sentry.notifications.types import NotificationSettingTypes
+from sentry.services.hybrid_cloud.user import APIUser
 from sentry.types.integrations import ExternalProviders
 
 if TYPE_CHECKING:
@@ -35,24 +36,30 @@ class OrganizationRequestNotification(BaseNotification, abc.ABC):
     def get_context(self) -> MutableMapping[str, Any]:
         return {}
 
-    def determine_recipients(self) -> Iterable[Team | User]:
+    def determine_recipients(self) -> Iterable[Team | APIUser]:
         return self.role_based_recipient_strategy.determine_recipients()
 
-    def get_notification_title(self, context: Mapping[str, Any] | None = None) -> str:
+    def get_notification_title(
+        self, provider: ExternalProviders, context: Mapping[str, Any] | None = None
+    ) -> str:
         # purposely use empty string for the notification title
         return ""
 
-    def build_notification_footer(self, recipient: Team | User) -> str:
+    def build_notification_footer(self, recipient: Team | User, provider: ExternalProviders) -> str:
         if isinstance(recipient, Team):
             raise NotImplementedError
 
-        # notification footer only used for Slack for now
-        settings_url = self.get_settings_url(recipient, ExternalProviders.SLACK)
+        settings_url = self.format_url(
+            text="Notification Settings",
+            url=self.get_settings_url(recipient, provider),
+            provider=provider,
+        )
+
         return self.role_based_recipient_strategy.build_notification_footer_from_settings_url(
             settings_url, recipient
         )
 
-    def get_title_link(self, recipient: Team | User) -> str | None:
+    def get_title_link(self, recipient: Team | User, provider: ExternalProviders) -> str | None:
         return None
 
     def get_log_params(self, recipient: Team | User) -> MutableMapping[str, Any]:

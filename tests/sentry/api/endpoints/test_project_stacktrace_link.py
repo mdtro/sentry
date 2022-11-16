@@ -4,6 +4,7 @@ from unittest import mock
 from sentry.integrations.example.integration import ExampleIntegration
 from sentry.models import Integration, OrganizationIntegration
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import region_silo_test
 
 
 def serialized_provider() -> Mapping[str, Any]:
@@ -33,6 +34,7 @@ def serialized_integration(integration: Integration) -> Mapping[str, Any]:
     }
 
 
+@region_silo_test
 class ProjectStacktraceLinkTest(APITestCase):
     endpoint = "sentry-api-0-project-stacktrace-link"
 
@@ -114,7 +116,7 @@ class ProjectStacktraceLinkTest(APITestCase):
         response = self.get_success_response(
             self.organization.slug, self.project.slug, qs_params={"file": "wrong/file/path"}
         )
-        assert response.data["config"] == self.expected_configurations()
+        assert response.data["config"] is None
         assert not response.data["sourceUrl"]
         assert response.data["error"] == "stack_root_mismatch"
         assert response.data["integrations"] == [serialized_integration(self.integration)]

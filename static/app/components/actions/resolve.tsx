@@ -5,17 +5,19 @@ import {openModal} from 'sentry/actionCreators/modal';
 import Button from 'sentry/components/button';
 import ButtonBar from 'sentry/components/buttonBar';
 import {openConfirmModal} from 'sentry/components/confirm';
+import CustomCommitsResolutionModal from 'sentry/components/customCommitsResolutionModal';
 import CustomResolutionModal from 'sentry/components/customResolutionModal';
-import DropdownMenuControlV2 from 'sentry/components/dropdownMenuControlV2';
+import DropdownMenuControl from 'sentry/components/dropdownMenuControl';
+import type {MenuItemProps} from 'sentry/components/dropdownMenuItem';
 import Tooltip from 'sentry/components/tooltip';
 import {IconCheckmark, IconChevron} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import {
+  GroupStatusResolution,
   Organization,
   Release,
   ResolutionStatus,
   ResolutionStatusDetails,
-  UpdateResolutionStatus,
 } from 'sentry/types';
 import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
 import {formatVersion} from 'sentry/utils/formatters';
@@ -29,20 +31,32 @@ const defaultProps = {
 
 type Props = {
   hasRelease: boolean;
-  onUpdate: (data: UpdateResolutionStatus) => void;
+  onUpdate: (data: GroupStatusResolution) => void;
   orgSlug: string;
   organization: Organization;
   confirmMessage?: React.ReactNode;
   disableDropdown?: boolean;
+  disableTooltip?: boolean;
   disabled?: boolean;
+  hideIcon?: boolean;
   latestRelease?: Release;
+  priority?: 'primary';
   projectFetchError?: boolean;
   projectSlug?: string;
   shouldConfirm?: boolean;
+  size?: 'xs' | 'sm';
 } & Partial<typeof defaultProps>;
 
 class ResolveActions extends Component<Props> {
   static defaultProps = defaultProps;
+
+  handleCommitResolution(statusDetails: ResolutionStatusDetails) {
+    const {onUpdate} = this.props;
+    onUpdate({
+      status: ResolutionStatus.RESOLVED,
+      statusDetails,
+    });
+  }
 
   handleAnotherExistingReleaseResolution(statusDetails: ResolutionStatusDetails) {
     const {organization, onUpdate} = this.props;
@@ -101,11 +115,13 @@ class ResolveActions extends Component<Props> {
       >
         <Button
           priority="primary"
-          size="xsmall"
+          size="xs"
           icon={<IconCheckmark size="xs" />}
           aria-label={t('Unresolve')}
           disabled={isAutoResolved}
-          onClick={() => onUpdate({status: ResolutionStatus.UNRESOLVED})}
+          onClick={() =>
+            onUpdate({status: ResolutionStatus.UNRESOLVED, statusDetails: {}})
+          }
         />
       </Tooltip>
     );
@@ -122,6 +138,8 @@ class ResolveActions extends Component<Props> {
       disabled,
       confirmLabel,
       disableDropdown,
+      size = 'xs',
+      priority,
     } = this.props;
 
     if (isResolved) {
@@ -141,13 +159,12 @@ class ResolveActions extends Component<Props> {
       });
     };
 
-    const items = [
+    const items: MenuItemProps[] = [
       {
         key: 'next-release',
         label: t('The next release'),
         details: actionTitle,
         onAction: () => onActionOrConfirm(this.handleNextReleaseResolution),
-        showDividers: !hasRelease,
       },
       {
         key: 'current-release',
@@ -156,26 +173,31 @@ class ResolveActions extends Component<Props> {
           : t('The current release'),
         details: actionTitle,
         onAction: () => onActionOrConfirm(this.handleCurrentReleaseResolution),
-        showDividers: !hasRelease,
       },
       {
         key: 'another-release',
         label: t('Another existing release\u2026'),
         onAction: () => this.openCustomReleaseModal(),
       },
+      {
+        key: 'a-commit',
+        label: t('A commit\u2026'),
+        onAction: () => this.openCustomCommitModal(),
+      },
     ];
 
     const isDisabled = !projectSlug ? disabled : disableDropdown;
 
     return (
-      <DropdownMenuControlV2
+      <DropdownMenuControl
         items={items}
-        trigger={({props: triggerProps, ref: triggerRef}) => (
+        trigger={triggerProps => (
           <DropdownTrigger
-            ref={triggerRef}
             {...triggerProps}
+            type="button"
+            size={size}
+            priority={priority}
             aria-label={t('More resolve options')}
-            size="xsmall"
             icon={<IconChevron direction="down" size="xs" />}
             disabled={isDisabled}
           />
@@ -189,6 +211,21 @@ class ResolveActions extends Component<Props> {
         isDisabled={isDisabled}
       />
     );
+  }
+
+  openCustomCommitModal() {
+    const {orgSlug, projectSlug} = this.props;
+
+    openModal(deps => (
+      <CustomCommitsResolutionModal
+        {...deps}
+        onSelected={(statusDetails: ResolutionStatusDetails) =>
+          this.handleCommitResolution(statusDetails)
+        }
+        orgSlug={orgSlug}
+        projectSlug={projectSlug}
+      />
+    ));
   }
 
   openCustomReleaseModal() {
@@ -215,6 +252,10 @@ class ResolveActions extends Component<Props> {
       disabled,
       confirmLabel,
       projectFetchError,
+      disableTooltip,
+      priority,
+      size = 'xs',
+      hideIcon = false,
     } = this.props;
 
     if (isResolved) {
@@ -224,7 +265,7 @@ class ResolveActions extends Component<Props> {
     const onResolve = () =>
       openConfirmModal({
         bypass: !shouldConfirm,
-        onConfirm: () => onUpdate({status: ResolutionStatus.RESOLVED}),
+        onConfirm: () => onUpdate({status: ResolutionStatus.RESOLVED, statusDetails: {}}),
         message: confirmMessage,
         confirmText: confirmLabel,
       });
@@ -233,12 +274,14 @@ class ResolveActions extends Component<Props> {
       <Tooltip disabled={!projectFetchError} title={t('Error fetching project')}>
         <ButtonBar merged>
           <ResolveButton
-            size="xsmall"
+            type="button"
+            priority={priority}
+            size={size}
             title={t(
               'Resolves the issue. The issue will get unresolved if it happens again.'
             )}
-            tooltipProps={{delay: 300, disabled}}
-            icon={<IconCheckmark size="xs" />}
+            tooltipProps={{delay: 300, disabled: disabled || disableTooltip}}
+            icon={hideIcon ? null : <IconCheckmark size={size} />}
             onClick={onResolve}
             disabled={disabled}
           >
@@ -253,9 +296,10 @@ class ResolveActions extends Component<Props> {
 
 export default withOrganization(ResolveActions);
 
-const ResolveButton = styled(Button)`
+const ResolveButton = styled(Button)<{priority?: 'primary'}>`
   box-shadow: none;
   border-radius: ${p => p.theme.borderRadiusLeft};
+  ${p => (p.priority === 'primary' ? `border-right-color: ${p.theme.background};` : '')}
 `;
 
 const DropdownTrigger = styled(Button)`

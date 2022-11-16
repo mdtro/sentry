@@ -6,6 +6,8 @@ from typing import Any, Mapping
 # XXX(mdtro): backwards compatible imports for celery 4.4.7, remove after upgrade to 5.2.7
 import celery
 
+from sentry.tasks.sentry_functions import send_sentry_function_webhook
+
 if celery.version_info >= (5, 2):
     from celery import current_task
 else:
@@ -14,10 +16,10 @@ else:
 from django.urls import reverse
 from requests.exceptions import RequestException
 
-from sentry import analytics
+from sentry import analytics, features
 from sentry.api.serializers import AppPlatformEvent, serialize
 from sentry.constants import SentryAppInstallationStatus
-from sentry.eventstore.models import Event
+from sentry.eventstore.models import Event, GroupEvent
 from sentry.models import (
     Activity,
     Group,
@@ -25,6 +27,7 @@ from sentry.models import (
     Project,
     SentryApp,
     SentryAppInstallation,
+    SentryFunction,
     ServiceHook,
     ServiceHookProject,
     User,
@@ -195,7 +198,7 @@ def _process_resource_change(action, sender, instance_id, retryer=None, *args, *
 
     org = None
 
-    if isinstance(instance, Group) or isinstance(instance, Event):
+    if isinstance(instance, (Group, Event, GroupEvent)):
         org = Organization.objects.get_from_cache(
             id=Project.objects.get_from_cache(id=instance.project_id).organization_id
         )
@@ -209,13 +212,25 @@ def _process_resource_change(action, sender, instance_id, retryer=None, *args, *
 
     for installation in installations:
         data = {}
-        if isinstance(instance, Event):
+        if isinstance(instance, Event) or isinstance(instance, GroupEvent):
             data[name] = _webhook_event_data(instance, instance.group_id, instance.project_id)
         else:
             data[name] = serialize(instance)
 
         # Trigger a new task for each webhook
         send_resource_change_webhook.delay(installation_id=installation.id, event=event, data=data)
+
+    if features.has("organizations:sentry-functions", org):
+        data = {}
+        if not isinstance(instance, Event) and not isinstance(instance, GroupEvent):
+            data[name] = serialize(instance)
+            event_type = event.split(".")[0]
+            # not sending error webhooks as of yet, can be added later
+            for fn in SentryFunction.objects.get_sentry_functions(org, event_type):
+                if event_type == "issue":
+                    send_sentry_function_webhook.delay(
+                        fn.external_id, event, data["issue"]["id"], data
+                    )
 
 
 @instrumented_task("sentry.tasks.process_resource_change_bound", bind=True, **TASK_OPTIONS)

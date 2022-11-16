@@ -14,7 +14,8 @@ class WhereShouldBeNotifiedTest(TestCase):
         notification_settings = {
             self.user: {
                 NotificationScopeType.USER: {
-                    ExternalProviders.EMAIL: NotificationSettingOptionValues.ALWAYS
+                    ExternalProviders.EMAIL: NotificationSettingOptionValues.ALWAYS,
+                    ExternalProviders.SLACK: NotificationSettingOptionValues.NEVER,
                 }
             }
         }
@@ -27,11 +28,16 @@ class WhereShouldBeNotifiedTest(TestCase):
             self.user: {
                 NotificationScopeType.USER: {
                     ExternalProviders.EMAIL: NotificationSettingOptionValues.ALWAYS,
-                    ExternalProviders.SLACK: NotificationSettingOptionValues.ALWAYS,
                 }
             }
         }
         assert where_should_recipient_be_notified(notification_settings, self.user) == [
+            ExternalProviders.EMAIL,
+            ExternalProviders.SLACK,
+        ]
+
+    def test_default_slack_enabled(self):
+        assert where_should_recipient_be_notified({}, self.user) == [
             ExternalProviders.EMAIL,
             ExternalProviders.SLACK,
         ]

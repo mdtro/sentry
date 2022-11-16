@@ -5,7 +5,7 @@ import styled from '@emotion/styled';
 
 import MenuHeader from 'sentry/components/actions/menuHeader';
 import CheckboxFancy from 'sentry/components/checkboxFancy/checkboxFancy';
-import {GetActorPropsFn} from 'sentry/components/dropdownMenu';
+import {GetActorPropsFn} from 'sentry/components/deprecatedDropdownMenu';
 import MenuItem from 'sentry/components/menuItem';
 import {TeamSelection} from 'sentry/components/performance/teamKeyTransactionsManager';
 import {t} from 'sentry/locale';
@@ -31,7 +31,7 @@ type Props = {
   organization: Organization;
   project: Project;
   teams: Team[];
-  title: React.ComponentClass<TitleProps>;
+  title: React.ComponentType<TitleProps>;
   transactionName: string;
   initialValue?: number;
 };
@@ -142,6 +142,7 @@ class TeamKeyTransaction extends Component<Props, State> {
               {t('My Teams with Access')}
               <ActionItem>
                 <CheckboxFancy
+                  aria-label={t('My Teams with Access')}
                   isDisabled={!isMyTeamsEnabled}
                   isChecked={teams.length === keyedTeams.size}
                   isIndeterminate={teams.length > keyedTeams.size && keyedTeams.size > 0}
@@ -268,6 +269,8 @@ type ItemProps = {
 };
 
 function TeamKeyTransactionItem({team, isKeyed, disabled, onSelect}: ItemProps) {
+  const id = `team_key_transaction_${team.slug}`;
+
   return (
     <DropdownMenuItem
       key={team.slug}
@@ -275,13 +278,13 @@ function TeamKeyTransactionItem({team, isKeyed, disabled, onSelect}: ItemProps) 
       onSelect={onSelect}
       stopPropagation
     >
-      <MenuItemContent>
+      <MenuItemContent id={id}>
         {team.slug}
         <ActionItem>
           {!defined(isKeyed) ? null : disabled ? (
             t('Max %s', MAX_TEAM_KEY_TRANSACTIONS)
           ) : (
-            <CheckboxFancy isChecked={isKeyed} />
+            <CheckboxFancy aria-labelledby={id} isChecked={isKeyed} />
           )}
         </ActionItem>
       </MenuItemContent>

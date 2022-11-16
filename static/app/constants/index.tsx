@@ -10,6 +10,9 @@ import {DataCategory, OrgRole, PermissionResource, Scope} from 'sentry/types';
 // This is the element id where we render our React application to
 export const ROOT_ELEMENT = 'blk_router';
 
+export const usingCustomerDomain =
+  typeof window !== 'undefined' ? Boolean(window?.__initialData?.customerDomain) : false;
+
 // This is considered the "default" route/view that users should be taken
 // to when the application does not have any further context
 //
@@ -185,6 +188,8 @@ export const AVATAR_URL_MAP = {
 
 export const MENU_CLOSE_DELAY = 200;
 
+export const SLOW_TOOLTIP_DELAY = 1000;
+
 export const MAX_PICKABLE_DAYS = 90;
 
 export const DEFAULT_STATS_PERIOD = '14d';
@@ -214,6 +219,7 @@ export const DATA_CATEGORY_NAMES = {
   [DataCategory.ERRORS]: t('Errors'),
   [DataCategory.TRANSACTIONS]: t('Transactions'),
   [DataCategory.ATTACHMENTS]: t('Attachments'),
+  [DataCategory.PROFILES]: t('Profiles'),
 };
 
 // Special Search characters
@@ -261,7 +267,6 @@ export const DISCOVER2_DOCS_URL = 'https://docs.sentry.io/product/discover-queri
 
 export const IS_ACCEPTANCE_TEST = !!process.env.IS_ACCEPTANCE_TEST;
 export const NODE_ENV = process.env.NODE_ENV;
-export const DISABLE_RR_WEB = !!process.env.DISABLE_RR_WEB;
 export const SPA_DSN = process.env.SPA_DSN;
 export const SENTRY_RELEASE_VERSION = process.env.SENTRY_RELEASE_VERSION;
 

@@ -17,6 +17,7 @@ from sentry.models import (
 )
 from sentry.testutils import APITestCase
 from sentry.testutils.helpers import with_feature
+from sentry.testutils.silo import region_silo_test
 
 
 class OrganizationMemberTestBase(APITestCase):
@@ -27,6 +28,7 @@ class OrganizationMemberTestBase(APITestCase):
         self.login_as(self.user)
 
 
+@region_silo_test
 class GetOrganizationMemberTest(OrganizationMemberTestBase):
     def test_me(self):
         response = self.get_success_response(self.organization.slug, "me")
@@ -131,6 +133,7 @@ class GetOrganizationMemberTest(OrganizationMemberTestBase):
         assert role_ids == ["contributor", "admin"]
 
 
+@region_silo_test
 class UpdateOrganizationMemberTest(OrganizationMemberTestBase):
     method = "put"
 
@@ -337,20 +340,31 @@ class UpdateOrganizationMemberTest(OrganizationMemberTestBase):
         member_om = OrganizationMember.objects.get(organization=self.organization, user=member)
         assert member_om.role == "member"
 
-    @with_feature("organizations:team-roles")
-    def test_cannot_update_with_retired_role(self):
+    def test_can_update_with_retired_role_without_flag(self):
         member = self.create_user("baz@example.com")
         member_om = self.create_member(
             organization=self.organization, user=member, role="member", teams=[]
         )
 
-        self.get_error_response(self.organization.slug, member_om.id, role="admin", status_code=400)
+        self.get_success_response(self.organization.slug, member_om.id, role="admin")
+
+        member_om = OrganizationMember.objects.get(organization=self.organization, user=member)
+        assert member_om.role == "admin"
+
+    @with_feature("organizations:team-roles")
+    def test_cannot_update_with_retired_role_with_flag(self):
+        member = self.create_user("baz@example.com")
+        member_om = self.create_member(
+            organization=self.organization, user=member, role="member", teams=[]
+        )
+
+        self.get_error_response(self.organization.slug, member_om.id, role="admin", status_code=403)
 
         member_om = OrganizationMember.objects.get(organization=self.organization, user=member)
         assert member_om.role == "member"
 
     @with_feature("organizations:team-roles")
-    def test_ignores_retired_role_updated_to_itself(self):
+    def test_can_update_retired_role_to_itself_with_flag(self):
         member = self.create_user("baz@example.com")
         member_om = self.create_member(
             organization=self.organization, user=member, role="admin", teams=[]
@@ -408,6 +422,7 @@ class UpdateOrganizationMemberTest(OrganizationMemberTestBase):
         assert response.status_code == 403
 
 
+@region_silo_test
 class DeleteOrganizationMemberTest(OrganizationMemberTestBase):
     method = "delete"
 
@@ -534,6 +549,7 @@ class DeleteOrganizationMemberTest(OrganizationMemberTestBase):
         ).exists()
 
 
+@region_silo_test
 class ResetOrganizationMember2faTest(APITestCase):
     def setUp(self):
         self.owner = self.create_user()

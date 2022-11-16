@@ -1,4 +1,5 @@
 import {useCallback, useEffect, useMemo} from 'react';
+// eslint-disable-next-line no-restricted-imports
 import {withRouter, WithRouterProps} from 'react-router';
 import styled from '@emotion/styled';
 import debounce from 'lodash/debounce';
@@ -167,7 +168,7 @@ function Search({
         debouncedSaveQueryMetrics(searchQuery);
 
         return (
-          <SearchWrapper>
+          <SearchWrapper role="search">
             {renderInput({getInputProps})}
 
             {isValidSearch && isOpen ? (

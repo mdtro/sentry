@@ -105,10 +105,10 @@ class ProjectInstallPlatform extends Component<Props, State> {
         <StyledPageHeader>
           <h2>{t('Configure %(platform)s', {platform: platform.name})}</h2>
           <ButtonBar gap={1}>
-            <Button size="small" to={gettingStartedLink}>
+            <Button size="sm" to={gettingStartedLink}>
               {t('< Back')}
             </Button>
-            <Button size="small" href={platformLink} external>
+            <Button size="sm" href={platformLink} external>
               {t('Full Documentation')}
             </Button>
           </ButtonBar>
@@ -157,6 +157,7 @@ class ProjectInstallPlatform extends Component<Props, State> {
                         project: (projects[0] as Project).id,
                       }
                     : {};
+
                 const showPerformancePrompt = performancePlatforms.includes(
                   platform.id as PlatformKey
                 );

@@ -5,19 +5,23 @@ import {Frame} from './../frame';
 import {Profile} from './profile';
 import {createFrameIndex} from './utils';
 
+// This is a simplified port of speedscope's profile with a few simplifications and some removed functionality.
+// head at commit e37f6fa7c38c110205e22081560b99cb89ce885e
+
+// We should try and remove these as we adopt our own profile format and only rely on the sampled format.
 export class SampledProfile extends Profile {
   static FromProfile(
     sampledProfile: Profiling.SampledProfile,
     frameIndex: ReturnType<typeof createFrameIndex>
   ): Profile {
-    const profile = new SampledProfile(
-      sampledProfile.endValue - sampledProfile.startValue,
-      sampledProfile.startValue,
-      sampledProfile.endValue,
-      sampledProfile.name,
-      sampledProfile.unit,
-      sampledProfile.threadID
-    );
+    const profile = new SampledProfile({
+      duration: sampledProfile.endValue - sampledProfile.startValue,
+      startedAt: sampledProfile.startValue,
+      endedAt: sampledProfile.endValue,
+      name: sampledProfile.name,
+      unit: sampledProfile.unit,
+      threadId: sampledProfile.threadID,
+    });
 
     if (sampledProfile.samples.length !== sampledProfile.weights.length) {
       throw new Error(
@@ -45,6 +49,9 @@ export class SampledProfile extends Profile {
   }
 
   appendSampleWithWeight(stack: Frame[], weight: number): void {
+    // Keep track of discarded samples and ones that may have negative weights
+    this.trackSampleStats(weight);
+
     // Ignore samples with 0 weight
     if (weight === 0) {
       return;
@@ -106,6 +113,7 @@ export class SampledProfile extends Profile {
       this.samples.push(node);
       this.weights.push(weight);
     }
+    this.rawWeights.push(weight);
   }
 
   build(): Profile {

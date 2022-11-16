@@ -1,6 +1,7 @@
 import {Fragment} from 'react';
 import styled from '@emotion/styled';
 import * as Sentry from '@sentry/react';
+import isEqual from 'lodash/isEqual';
 import moment from 'moment';
 
 import AsyncComponent from 'sentry/components/asyncComponent';
@@ -12,7 +13,7 @@ import ScoreCard from 'sentry/components/scoreCard';
 import {DEFAULT_STATS_PERIOD} from 'sentry/constants';
 import {t, tct} from 'sentry/locale';
 import space from 'sentry/styles/space';
-import {DataCategory, IntervalPeriod, Organization} from 'sentry/types';
+import {DataCategory, IntervalPeriod, Organization, Outcome} from 'sentry/types';
 import {parsePeriodToHours} from 'sentry/utils/dates';
 
 import {
@@ -20,7 +21,7 @@ import {
   FORMAT_DATETIME_HOURLY,
   getDateFromMoment,
 } from './usageChart/utils';
-import {Outcome, UsageSeries, UsageStat} from './types';
+import {UsageSeries, UsageStat} from './types';
 import UsageChart, {
   CHART_OPTIONS_DATA_TRANSFORM,
   ChartDataTransform,
@@ -39,6 +40,7 @@ type Props = {
     transform?: ChartDataTransform;
   }) => void;
   organization: Organization;
+  projectIds: number[];
   chartTransform?: string;
 } & AsyncComponent['props'];
 
@@ -48,14 +50,15 @@ type State = {
 
 class UsageStatsOrganization extends AsyncComponent<Props, State> {
   componentDidUpdate(prevProps: Props) {
-    const {dataDatetime: prevDateTime} = prevProps;
-    const {dataDatetime: currDateTime} = this.props;
+    const {dataDatetime: prevDateTime, projectIds: prevProjectIds} = prevProps;
+    const {dataDatetime: currDateTime, projectIds: currProjectIds} = this.props;
 
     if (
       prevDateTime.start !== currDateTime.start ||
       prevDateTime.end !== currDateTime.end ||
       prevDateTime.period !== currDateTime.period ||
-      prevDateTime.utc !== currDateTime.utc
+      prevDateTime.utc !== currDateTime.utc ||
+      !isEqual(prevProjectIds, currProjectIds)
     ) {
       this.reloadData();
     }
@@ -71,7 +74,7 @@ class UsageStatsOrganization extends AsyncComponent<Props, State> {
   }
 
   get endpointQuery() {
-    const {dataDatetime} = this.props;
+    const {dataDatetime, projectIds} = this.props;
 
     const queryDatetime =
       dataDatetime.start && dataDatetime.end
@@ -88,6 +91,7 @@ class UsageStatsOrganization extends AsyncComponent<Props, State> {
       ...queryDatetime,
       interval: getSeriesApiInterval(dataDatetime),
       groupBy: ['category', 'outcome'],
+      project: projectIds,
       field: ['sum(quantity)'],
     };
   }
@@ -322,7 +326,7 @@ class UsageStatsOrganization extends AsyncComponent<Props, State> {
     } catch (err) {
       Sentry.withScope(scope => {
         scope.setContext('query', this.endpointQuery);
-        scope.setContext('body', orgStats);
+        scope.setContext('body', {...orgStats});
         Sentry.captureException(err);
       });
 
@@ -399,7 +403,6 @@ class UsageStatsOrganization extends AsyncComponent<Props, State> {
 
     const hasError = error || !!dataError;
     const chartErrors: any = dataError ? {...errors, data: dataError} : errors; // TODO(ts): AsyncComponent
-
     return (
       <UsageChart
         isLoading={loading}
@@ -466,7 +469,7 @@ class UsageStatsOrganization extends AsyncComponent<Props, State> {
     return (
       <Fragment>
         {this.renderCards()}
-        <ChartWrapper>{this.renderChart()}</ChartWrapper>
+        <ChartWrapper data-test-id="usage-stats-chart">{this.renderChart()}</ChartWrapper>
       </Fragment>
     );
   }

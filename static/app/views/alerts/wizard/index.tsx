@@ -14,8 +14,9 @@ import {Panel, PanelBody, PanelHeader} from 'sentry/components/panels';
 import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
 import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
-import {Organization} from 'sentry/types';
+import {Organization, Project} from 'sentry/types';
 import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+import withProjects from 'sentry/utils/withProjects';
 import BuilderBreadCrumbs from 'sentry/views/alerts/builder/builderBreadCrumbs';
 import {Dataset} from 'sentry/views/alerts/rules/metric/types';
 import {AlertRuleType} from 'sentry/views/alerts/types';
@@ -38,6 +39,7 @@ type RouteParams = {
 type Props = RouteComponentProps<RouteParams, {}> & {
   organization: Organization;
   projectId: string;
+  projects: Project[];
 };
 
 type State = {
@@ -81,8 +83,6 @@ class AlertWizard extends Component<Props, State> {
     const isMetricAlert = !!metricRuleTemplate;
     const isTransactionDataset = metricRuleTemplate?.dataset === Dataset.TRANSACTIONS;
 
-    const hasAlertWizardV3 = organization.features.includes('alert-wizard-v3');
-
     if (
       organization.features.includes('alert-crash-free-metrics') &&
       metricRuleTemplate?.dataset === Dataset.SESSIONS
@@ -90,25 +90,16 @@ class AlertWizard extends Component<Props, State> {
       metricRuleTemplate = {...metricRuleTemplate, dataset: Dataset.METRICS};
     }
 
-    const to = hasAlertWizardV3
-      ? {
-          pathname: `/organizations/${organization.slug}/alerts/new/${
-            isMetricAlert ? AlertRuleType.METRIC : AlertRuleType.ISSUE
-          }/`,
-          query: {
-            ...(metricRuleTemplate ? metricRuleTemplate : {}),
-            project: projectId,
-            referrer: location?.query?.referrer,
-          },
-        }
-      : {
-          pathname: `/organizations/${organization.slug}/alerts/${projectId}/new/`,
-          query: {
-            ...(metricRuleTemplate ? metricRuleTemplate : {}),
-            createFromWizard: true,
-            referrer: location?.query?.referrer,
-          },
-        };
+    const to = {
+      pathname: `/organizations/${organization.slug}/alerts/new/${
+        isMetricAlert ? AlertRuleType.METRIC : AlertRuleType.ISSUE
+      }/`,
+      query: {
+        ...(metricRuleTemplate ? metricRuleTemplate : {}),
+        project: projectId,
+        referrer: location?.query?.referrer,
+      },
+    };
 
     const renderNoAccess = p => (
       <Hovercard
@@ -328,6 +319,9 @@ const WizardFooter = styled('div')`
 const WizardButtonContainer = styled('div')`
   display: flex;
   justify-content: flex-end;
+  a:not(:last-child) {
+    margin-right: ${space(1)};
+  }
 `;
 
-export default AlertWizard;
+export default withProjects(AlertWizard);

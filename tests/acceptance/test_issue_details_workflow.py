@@ -1,13 +1,16 @@
 from datetime import datetime
 
 from django.utils import timezone
+from selenium.webdriver.common.by import By
 
 from fixtures.page_objects.issue_details import IssueDetailsPage
 from sentry.models.groupinbox import GroupInboxReason, add_group_to_inbox
 from sentry.testutils import AcceptanceTestCase, SnubaTestCase
+from sentry.testutils.silo import region_silo_test
 from sentry.utils.samples import load_data
 
 
+@region_silo_test
 class IssueDetailsWorkflowTest(AcceptanceTestCase, SnubaTestCase):
     def setUp(self):
         super().setUp()
@@ -74,7 +77,7 @@ class IssueDetailsWorkflowTest(AcceptanceTestCase, SnubaTestCase):
         self.page.visit_issue_activity(self.org.slug, event.group.id)
 
         form = self.page.find_comment_form()
-        form.find_element_by_tag_name("textarea").send_keys("this looks bad")
+        form.find_element(by=By.TAG_NAME, value="textarea").send_keys("this looks bad")
         form.submit()
 
         assert self.page.has_comment("this looks bad")

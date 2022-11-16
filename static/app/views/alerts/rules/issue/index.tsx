@@ -1,10 +1,11 @@
-import {ChangeEvent, Fragment, ReactNode} from 'react';
+import {ChangeEvent, ReactNode} from 'react';
 import {browserHistory, RouteComponentProps} from 'react-router';
 import {components} from 'react-select';
 import styled from '@emotion/styled';
 import classNames from 'classnames';
 import {Location} from 'history';
 import cloneDeep from 'lodash/cloneDeep';
+import debounce from 'lodash/debounce';
 import omit from 'lodash/omit';
 import set from 'lodash/set';
 
@@ -19,24 +20,35 @@ import Feature from 'sentry/components/acl/feature';
 import Alert from 'sentry/components/alert';
 import Button from 'sentry/components/button';
 import Confirm from 'sentry/components/confirm';
-import Input from 'sentry/components/forms/controls/input';
+import SelectControl from 'sentry/components/forms/controls/selectControl';
 import Field from 'sentry/components/forms/field';
 import FieldHelp from 'sentry/components/forms/field/fieldHelp';
-import Form from 'sentry/components/forms/form';
+import SelectField from 'sentry/components/forms/fields/selectField';
+import Form, {FormProps} from 'sentry/components/forms/form';
 import FormField from 'sentry/components/forms/formField';
-import SelectControl from 'sentry/components/forms/selectControl';
-import SelectField from 'sentry/components/forms/selectField';
-import TeamSelector from 'sentry/components/forms/teamSelector';
 import IdBadge from 'sentry/components/idBadge';
+import Input from 'sentry/components/input';
+import * as Layout from 'sentry/components/layouts/thirds';
 import List from 'sentry/components/list';
 import ListItem from 'sentry/components/list/listItem';
 import LoadingMask from 'sentry/components/loadingMask';
+import {CursorHandler} from 'sentry/components/pagination';
 import {Panel, PanelBody} from 'sentry/components/panels';
+import TeamSelector from 'sentry/components/teamSelector';
 import {ALL_ENVIRONMENTS_KEY} from 'sentry/constants';
 import {IconChevron} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
+import GroupStore from 'sentry/stores/groupStore';
 import space from 'sentry/styles/space';
-import {Environment, OnboardingTaskKey, Organization, Project, Team} from 'sentry/types';
+import {
+  Environment,
+  IssueOwnership,
+  Member,
+  OnboardingTaskKey,
+  Organization,
+  Project,
+  Team,
+} from 'sentry/types';
 import {
   IssueAlertRule,
   IssueAlertRuleAction,
@@ -52,6 +64,7 @@ import recreateRoute from 'sentry/utils/recreateRoute';
 import routeTitleGen from 'sentry/utils/routeTitle';
 import withOrganization from 'sentry/utils/withOrganization';
 import withProjects from 'sentry/utils/withProjects';
+import PreviewTable from 'sentry/views/alerts/rules/issue/previewTable';
 import {
   CHANGE_ALERT_CONDITION_IDS,
   CHANGE_ALERT_PLACEHOLDERS_LABELS,
@@ -91,11 +104,14 @@ const defaultRule: UnsavedIssueAlertRule = {
   conditions: [],
   filters: [],
   name: '',
-  frequency: 30,
+  frequency: 60 * 24,
   environment: ALL_ENVIRONMENTS_KEY,
 };
 
 const POLLING_MAX_TIME_LIMIT = 3 * 60000;
+
+const SENTRY_ISSUE_ALERT_DOCS_URL =
+  'https://docs.sentry.io/product/alerts/alert-types/#issue-alerts';
 
 type ConditionOrActionProperty = 'conditions' | 'actions' | 'filters';
 
@@ -107,8 +123,14 @@ type RuleTaskResponse = {
 
 type RouteParams = {orgId: string; projectId?: string; ruleId?: string};
 
+export type IncompatibleRule = {
+  index: number | null;
+  type: 'condition' | 'filter' | 'none';
+};
+
 type Props = {
   location: Location;
+  members: Member[] | undefined;
   organization: Organization;
   project: Project;
   projects: Project[];
@@ -127,9 +149,19 @@ type State = AsyncView['state'] & {
     [key: string]: string[];
   };
   environments: Environment[] | null;
+  incompatibleCondition: number | null;
+  incompatibleFilter: number | null;
+  issueCount: number;
+  loadingPreview: boolean;
+  previewCursor: string | null | undefined;
+  previewError: boolean;
+  previewGroups: string[] | null;
+  previewPage: number;
   project: Project;
+  sendingNotification: boolean;
   uuid: null | string;
   duplicateTargetRule?: UnsavedIssueAlertRule | IssueAlertRule | null;
+  ownership?: null | IssueOwnership;
   rule?: UnsavedIssueAlertRule | IssueAlertRule | null;
 };
 
@@ -141,28 +173,50 @@ class IssueRuleEditor extends AsyncView<Props, State> {
   pollingTimeout: number | undefined = undefined;
 
   get isDuplicateRule(): boolean {
-    const {location, organization} = this.props;
+    const {location} = this.props;
     const createFromDuplicate = location?.query.createFromDuplicate === 'true';
-    const hasDuplicateAlertRules = organization.features.includes('duplicate-alert-rule');
-    return (
-      hasDuplicateAlertRules && createFromDuplicate && location?.query.duplicateRuleId
-    );
+    return createFromDuplicate && location?.query.duplicateRuleId;
   }
 
-  get hasAlertWizardV3(): boolean {
-    return this.props.organization.features.includes('alert-wizard-v3');
+  componentWillMount() {
+    this.fetchPreview();
   }
 
   componentWillUnmount() {
+    GroupStore.reset();
     window.clearTimeout(this.pollingTimeout);
   }
 
   componentDidUpdate(_prevProps: Props, prevState: State) {
+    if (prevState.previewCursor !== this.state.previewCursor) {
+      this.fetchPreview();
+    } else if (this.isRuleStateChange(prevState)) {
+      this.setState({
+        loadingPreview: true,
+        incompatibleCondition: null,
+        incompatibleFilter: null,
+      });
+      this.fetchPreviewDebounced();
+      this.checkIncompatibleRule();
+    }
     if (prevState.project.id === this.state.project.id) {
       return;
     }
 
     this.fetchEnvironments();
+  }
+
+  isRuleStateChange(prevState: State): boolean {
+    const prevRule = prevState.rule;
+    const curRule = this.state.rule;
+    return (
+      JSON.stringify(prevRule?.conditions) !== JSON.stringify(curRule?.conditions) ||
+      JSON.stringify(prevRule?.filters) !== JSON.stringify(curRule?.filters) ||
+      prevRule?.actionMatch !== curRule?.actionMatch ||
+      prevRule?.filterMatch !== curRule?.filterMatch ||
+      prevRule?.frequency !== curRule?.frequency ||
+      JSON.stringify(prevState.project) !== JSON.stringify(this.state.project)
+    );
   }
 
   getTitle() {
@@ -188,6 +242,15 @@ class IssueRuleEditor extends AsyncView<Props, State> {
       environments: [],
       uuid: null,
       project,
+      previewGroups: null,
+      previewCursor: null,
+      previewError: false,
+      issueCount: 0,
+      previewPage: 0,
+      loadingPreview: false,
+      sendingNotification: false,
+      incompatibleCondition: null,
+      incompatibleFilter: null,
     };
 
     const projectTeamIds = new Set(project.teams.map(({id}) => id));
@@ -199,29 +262,31 @@ class IssueRuleEditor extends AsyncView<Props, State> {
 
   getEndpoints(): ReturnType<AsyncView['getEndpoints']> {
     const {
-      organization,
       location: {query},
       params: {ruleId, orgId},
     } = this.props;
     // project in state isn't initialized when getEndpoints is first called
     const project = this.state?.project ?? this.props.project;
-    const hasDuplicateAlertRules = organization.features.includes('duplicate-alert-rule');
 
     const endpoints = [
-      ['environments', `/projects/${orgId}/${project.slug}/environments/`],
+      [
+        'environments',
+        `/projects/${orgId}/${project.slug}/environments/`,
+        {
+          query: {
+            visibility: 'visible',
+          },
+        },
+      ],
       ['configs', `/projects/${orgId}/${project.slug}/rules/configuration/`],
+      ['ownership', `/projects/${orgId}/${project.slug}/ownership/`],
     ];
 
     if (ruleId) {
       endpoints.push(['rule', `/projects/${orgId}/${project.slug}/rules/${ruleId}/`]);
     }
 
-    if (
-      hasDuplicateAlertRules &&
-      !ruleId &&
-      query.createFromDuplicate &&
-      query.duplicateRuleId
-    ) {
+    if (!ruleId && query.createFromDuplicate && query.duplicateRuleId) {
       endpoints.push([
         'duplicateTargetRule',
         `/projects/${orgId}/${project.slug}/rules/${query.duplicateRuleId}/`,
@@ -298,6 +363,81 @@ class IssueRuleEditor extends AsyncView<Props, State> {
     }
   };
 
+  fetchPreview = (resetCursor = false) => {
+    const {organization} = this.props;
+    const {project, rule, previewCursor} = this.state;
+
+    if (!rule || !organization.features.includes('issue-alert-preview')) {
+      return;
+    }
+
+    this.setState({loadingPreview: true});
+    if (resetCursor) {
+      this.setState({previewCursor: null, previewPage: 0});
+    }
+    // we currently don't have a way to parse objects from query params, so this method is POST for now
+    this.api
+      .requestPromise(`/projects/${organization.slug}/${project.slug}/rules/preview`, {
+        method: 'POST',
+        includeAllArgs: true,
+        query: {
+          cursor: resetCursor ? null : previewCursor,
+          per_page: 5,
+        },
+        data: {
+          conditions: rule?.conditions || [],
+          filters: rule?.filters || [],
+          actionMatch: rule?.actionMatch || 'all',
+          filterMatch: rule?.filterMatch || 'all',
+          frequency: rule?.frequency || 60,
+        },
+      })
+      .then(([data, _, resp]) => {
+        GroupStore.add(data);
+
+        const pageLinks = resp?.getResponseHeader('Link');
+        const hits = resp?.getResponseHeader('X-Hits');
+        const issueCount =
+          typeof hits !== 'undefined' && hits ? parseInt(hits, 10) || 0 : 0;
+        this.setState({
+          previewGroups: data.map(g => g.id),
+          previewError: false,
+          pageLinks: pageLinks ?? '',
+          issueCount,
+          loadingPreview: false,
+        });
+      })
+      .catch(_ => {
+        this.setState({
+          previewError: true,
+          loadingPreview: false,
+        });
+      });
+  };
+
+  fetchPreviewDebounced = debounce(() => {
+    this.fetchPreview(true);
+  }, 1000);
+
+  // As more incompatible combinations are added, we will need a more generic way to check for incompatibility.
+  checkIncompatibleRule = debounce(() => {
+    if (this.props.organization.features.includes('issue-alert-incompatible-rules')) {
+      const incompatibleRule = findIncompatibleRules(this.state.rule);
+      if (incompatibleRule.type === 'condition') {
+        this.setState({incompatibleCondition: incompatibleRule.index});
+      } else if (incompatibleRule.type === 'filter') {
+        this.setState({incompatibleFilter: incompatibleRule.index});
+      }
+    }
+  }, 500);
+
+  onPreviewCursor: CursorHandler = (cursor, _1, _2, direction) => {
+    this.setState({
+      previewCursor: cursor,
+      previewPage: this.state.previewPage + direction,
+    });
+  };
+
   fetchEnvironments() {
     const {
       params: {orgId},
@@ -325,6 +465,29 @@ class IssueRuleEditor extends AsyncView<Props, State> {
       this.pollHandler(quitTime);
     }, 1000);
   }
+
+  testNotifications = () => {
+    const {organization} = this.props;
+    const {project, rule} = this.state;
+    this.setState({sendingNotification: true});
+    addLoadingMessage(t('Sending a test notification...'));
+    this.api
+      .requestPromise(`/projects/${organization.slug}/${project.slug}/rule-actions/`, {
+        method: 'POST',
+        data: {
+          actions: rule?.actions ?? [],
+        },
+      })
+      .then(() => {
+        addSuccessMessage(t('Notification sent!'));
+      })
+      .catch(() => {
+        addErrorMessage(t('Notification failed'));
+      })
+      .finally(() => {
+        this.setState({sendingNotification: false});
+      });
+  };
 
   handleRuleSuccess = (isNew: boolean, rule: IssueAlertRule) => {
     const {organization, router} = this.props;
@@ -386,7 +549,7 @@ class IssueRuleEditor extends AsyncView<Props, State> {
         data: rule,
         query: {
           duplicateRule: this.isDuplicateRule ? 'true' : 'false',
-          wizardV3: this.hasAlertWizardV3 ? 'true' : 'false',
+          wizardV3: 'true',
         },
       });
 
@@ -528,14 +691,18 @@ class IssueRuleEditor extends AsyncView<Props, State> {
     });
   };
 
-  handleAddRow = (type: ConditionOrActionProperty, id: string) => {
+  handleAddRow = (
+    type: ConditionOrActionProperty,
+    item: IssueAlertRuleActionTemplate
+  ) => {
     this.setState(prevState => {
       const clonedState = cloneDeep(prevState);
 
       // Set initial configuration
       const newRule = {
-        ...this.getInitialValue(type, id),
-        id,
+        ...this.getInitialValue(type, item.id),
+        id: item.id,
+        sentryAppInstallationUuid: item.sentryAppInstallationUuid,
       };
       const newTypeList = prevState.rule ? prevState.rule[type] : [];
 
@@ -549,7 +716,7 @@ class IssueRuleEditor extends AsyncView<Props, State> {
       organization,
       project_id: project.id,
       type,
-      name: id,
+      name: item.id,
     });
   };
 
@@ -557,19 +724,20 @@ class IssueRuleEditor extends AsyncView<Props, State> {
     this.setState(prevState => {
       const clonedState = cloneDeep(prevState);
 
-      const newTypeList = prevState.rule ? prevState.rule[type] : [];
-      if (prevState.rule) {
-        newTypeList.splice(idx, 1);
-      }
+      const newTypeList = prevState.rule ? [...prevState.rule[type]] : [];
+      newTypeList.splice(idx, 1);
 
       set(clonedState, `rule[${type}]`, newTypeList);
       return clonedState;
     });
   };
 
-  handleAddCondition = (id: string) => this.handleAddRow('conditions', id);
-  handleAddAction = (id: string) => this.handleAddRow('actions', id);
-  handleAddFilter = (id: string) => this.handleAddRow('filters', id);
+  handleAddCondition = (template: IssueAlertRuleActionTemplate) =>
+    this.handleAddRow('conditions', template);
+  handleAddAction = (template: IssueAlertRuleActionTemplate) =>
+    this.handleAddRow('actions', template);
+  handleAddFilter = (template: IssueAlertRuleActionTemplate) =>
+    this.handleAddRow('filters', template);
   handleDeleteCondition = (ruleIndex: number) =>
     this.handleDeleteRow('conditions', ruleIndex);
   handleDeleteAction = (ruleIndex: number) => this.handleDeleteRow('actions', ruleIndex);
@@ -653,21 +821,20 @@ class IssueRuleEditor extends AsyncView<Props, State> {
 
     return (
       <StyledField
-        hasAlertWizardV3={this.hasAlertWizardV3}
-        label={this.hasAlertWizardV3 ? null : t('Alert name')}
-        help={this.hasAlertWizardV3 ? null : t('Add a name for this alert')}
+        label={null}
+        help={null}
         error={detailedError?.name?.[0]}
         disabled={disabled}
         required
         stacked
-        flexibleControlStateSize={this.hasAlertWizardV3 ? true : undefined}
+        flexibleControlStateSize
       >
         <Input
           type="text"
           name="name"
           value={name}
           data-test-id="alert-name"
-          placeholder={this.hasAlertWizardV3 ? t('Enter Alert Name') : t('My Rule Name')}
+          placeholder={t('Enter Alert Name')}
           onChange={(event: ChangeEvent<HTMLInputElement>) =>
             this.handleChange('name', event.target.value)
           }
@@ -683,14 +850,7 @@ class IssueRuleEditor extends AsyncView<Props, State> {
     const ownerId = rule?.owner?.split(':')[1];
 
     return (
-      <StyledField
-        hasAlertWizardV3={this.hasAlertWizardV3}
-        extraMargin
-        label={this.hasAlertWizardV3 ? null : t('Team')}
-        help={this.hasAlertWizardV3 ? null : t('The team that can edit this alert.')}
-        disabled={disabled}
-        flexibleControlStateSize={this.hasAlertWizardV3 ? true : undefined}
-      >
+      <StyledField label={null} help={null} disabled={disabled} flexibleControlStateSize>
         <TeamSelector
           value={this.getTeamId()}
           project={project}
@@ -716,8 +876,91 @@ class IssueRuleEditor extends AsyncView<Props, State> {
     );
   }
 
+  renderEnvironmentSelect(disabled: boolean) {
+    const {environments, rule} = this.state;
+
+    const environmentOptions = [
+      {
+        value: ALL_ENVIRONMENTS_KEY,
+        label: t('All Environments'),
+      },
+      ...(environments?.map(env => ({value: env.name, label: getDisplayName(env)})) ??
+        []),
+    ];
+
+    const environment =
+      !rule || !rule.environment ? ALL_ENVIRONMENTS_KEY : rule.environment;
+
+    return (
+      <FormField
+        name="environment"
+        inline={false}
+        style={{padding: 0, border: 'none'}}
+        flexibleControlStateSize
+        className={this.hasError('environment') ? ' error' : ''}
+        required
+        disabled={disabled}
+      >
+        {({onChange, onBlur}) => (
+          <SelectControl
+            clearable={false}
+            disabled={disabled}
+            value={environment}
+            options={environmentOptions}
+            onChange={({value}) => {
+              this.handleEnvironmentChange(value);
+              onChange(value, {});
+              onBlur(value, {});
+            }}
+          />
+        )}
+      </FormField>
+    );
+  }
+
+  renderPreviewText() {
+    const {issueCount, previewError} = this.state;
+    if (previewError) {
+      return t(
+        "Select a condition above to see which issues would've triggered this alert"
+      );
+    }
+    return tct(
+      "[issueCount] issues would have triggered this rule in the past 14 days approximately. If you're looking to reduce noise then make sure to [link:read the docs].",
+      {
+        issueCount,
+        link: <a href={SENTRY_ISSUE_ALERT_DOCS_URL} />,
+      }
+    );
+  }
+
+  renderPreviewTable() {
+    const {members} = this.props;
+    const {
+      previewGroups,
+      previewError,
+      pageLinks,
+      issueCount,
+      previewPage,
+      loadingPreview,
+    } = this.state;
+    return (
+      <PreviewTable
+        previewGroups={previewGroups}
+        members={members}
+        pageLinks={pageLinks}
+        onCursor={this.onPreviewCursor}
+        issueCount={issueCount}
+        page={previewPage}
+        loading={loadingPreview}
+        error={previewError}
+      />
+    );
+  }
+
   renderProjectSelect(disabled: boolean) {
     const {project: _selectedProject, projects, organization} = this.props;
+    const {rule} = this.state;
     const hasOpenMembership = organization.features.includes('open-membership');
     const myProjects = projects.filter(project => project.hasAccess && project.isMember);
     const allProjects = projects.filter(
@@ -764,7 +1007,7 @@ class IssueRuleEditor extends AsyncView<Props, State> {
 
           return (
             <SelectControl
-              disabled={disabled}
+              disabled={disabled || isSavedAlertRule(rule)}
               value={selectedProject.id}
               styles={{
                 container: (provided: {[x: string]: string | number | boolean}) => ({
@@ -777,7 +1020,7 @@ class IssueRuleEditor extends AsyncView<Props, State> {
                 // if the current owner/team isn't part of project selected, update to the first available team
                 const nextSelectedProject =
                   projects.find(({id}) => id === value) ?? selectedProject;
-                const ownerId: String | undefined = model
+                const ownerId: string | undefined = model
                   .getValue('owner')
                   ?.split(':')[1];
                 if (
@@ -818,40 +1061,47 @@ class IssueRuleEditor extends AsyncView<Props, State> {
     const {frequency} = rule || {};
 
     return (
-      <StyledSelectField
-        hasAlertWizardV3={this.hasAlertWizardV3}
-        label={this.hasAlertWizardV3 ? null : t('Action Interval')}
-        help={
-          this.hasAlertWizardV3
-            ? null
-            : t('Perform these actions once this often for an issue')
-        }
-        clearable={false}
+      <FormField
         name="frequency"
+        inline={false}
+        style={{padding: 0, border: 'none'}}
+        label={null}
+        help={null}
         className={this.hasError('frequency') ? ' error' : ''}
-        value={frequency}
         required
-        options={FREQUENCY_OPTIONS}
-        onChange={val => this.handleChange('frequency', val)}
         disabled={disabled}
-        flexibleControlStateSize={this.hasAlertWizardV3 ? true : undefined}
-      />
+        flexibleControlStateSize
+      >
+        {({onChange, onBlur}) => (
+          <SelectControl
+            clearable={false}
+            disabled={disabled}
+            value={`${frequency}`}
+            options={FREQUENCY_OPTIONS}
+            onChange={({value}) => {
+              this.handleChange('frequency', value);
+              onChange(value, {});
+              onBlur(value, {});
+            }}
+          />
+        )}
+      </FormField>
     );
   }
 
   renderBody() {
     const {organization} = this.props;
-    const {environments, project, rule, detailedError, loading} = this.state;
+    const {
+      project,
+      rule,
+      detailedError,
+      loading,
+      ownership,
+      sendingNotification,
+      incompatibleCondition,
+      incompatibleFilter,
+    } = this.state;
     const {actions, filters, conditions, frequency} = rule || {};
-
-    const environmentOptions = [
-      {
-        value: ALL_ENVIRONMENTS_KEY,
-        label: t('All Environments'),
-      },
-      ...(environments?.map(env => ({value: env.name, label: getDisplayName(env)})) ??
-        []),
-    ];
 
     const environment =
       !rule || !rule.environment ? ALL_ENVIRONMENTS_KEY : rule.environment;
@@ -866,101 +1116,72 @@ class IssueRuleEditor extends AsyncView<Props, State> {
           const disabled = loading || !(isActiveSuperuser() || hasAccess);
 
           return (
-            <StyledForm
-              key={isSavedAlertRule(rule) ? rule.id : undefined}
-              onCancel={this.handleCancel}
-              onSubmit={this.handleSubmit}
-              initialData={{
-                ...rule,
-                environment,
-                frequency: `${frequency}`,
-                projectId: project.id,
-              }}
-              submitDisabled={disabled}
-              submitLabel={t('Save Rule')}
-              extraButton={
-                isSavedAlertRule(rule) ? (
-                  <Confirm
-                    disabled={disabled}
-                    priority="danger"
-                    confirmText={t('Delete Rule')}
-                    onConfirm={this.handleDeleteRule}
-                    header={t('Delete Rule')}
-                    message={t('Are you sure you want to delete this rule?')}
-                  >
-                    <Button priority="danger" type="button">
-                      {t('Delete Rule')}
-                    </Button>
-                  </Confirm>
-                ) : null
-              }
-            >
-              <List symbol="colored-numeric">
-                {loading && <SemiTransparentLoadingMask data-test-id="loading-mask" />}
-                <StyledListItem>{t('Add alert settings')}</StyledListItem>
-                {this.hasAlertWizardV3 ? (
-                  <SettingsContainer>
-                    <StyledSelectField
-                      hasAlertWizardV3={this.hasAlertWizardV3}
-                      className={classNames({
-                        error: this.hasError('environment'),
-                      })}
-                      placeholder={t('Select an Environment')}
-                      clearable={false}
-                      name="environment"
-                      options={environmentOptions}
-                      onChange={val => this.handleEnvironmentChange(val)}
+            <Main fullWidth>
+              <StyledForm
+                key={isSavedAlertRule(rule) ? rule.id : undefined}
+                onCancel={this.handleCancel}
+                onSubmit={this.handleSubmit}
+                initialData={{
+                  ...rule,
+                  environment,
+                  frequency: `${frequency}`,
+                  projectId: project.id,
+                }}
+                submitDisabled={
+                  disabled ||
+                  incompatibleCondition !== null ||
+                  incompatibleFilter !== null
+                }
+                submitLabel={t('Save Rule')}
+                extraButton={
+                  isSavedAlertRule(rule) ? (
+                    <Confirm
                       disabled={disabled}
-                      flexibleControlStateSize
+                      priority="danger"
+                      confirmText={t('Delete Rule')}
+                      onConfirm={this.handleDeleteRule}
+                      header={t('Delete Rule')}
+                      message={t('Are you sure you want to delete this rule?')}
+                    >
+                      <Button priority="danger" type="button">
+                        {t('Delete Rule')}
+                      </Button>
+                    </Confirm>
+                  ) : null
+                }
+              >
+                <List symbol="colored-numeric">
+                  {loading && <SemiTransparentLoadingMask data-test-id="loading-mask" />}
+                  <StyledListItem>
+                    <StepHeader>{t('Select an environment and project')}</StepHeader>
+                  </StyledListItem>
+                  <ContentIndent>
+                    <SettingsContainer>
+                      {this.renderEnvironmentSelect(disabled)}
+                      {this.renderProjectSelect(disabled)}
+                    </SettingsContainer>
+                  </ContentIndent>
+                  <SetConditionsListItem>
+                    <StepHeader>{t('Set conditions')}</StepHeader>
+                    <SetupAlertIntegrationButton
+                      projectSlug={project.slug}
+                      organization={organization}
                     />
-                    {this.renderProjectSelect(disabled)}
-                  </SettingsContainer>
-                ) : (
-                  <Panel>
-                    <PanelBody>
-                      <SelectField
-                        className={classNames({
-                          error: this.hasError('environment'),
-                        })}
-                        label={t('Environment')}
-                        help={t('Choose an environment for these conditions to apply to')}
-                        placeholder={t('Select an Environment')}
-                        clearable={false}
-                        name="environment"
-                        options={environmentOptions}
-                        onChange={val => this.handleEnvironmentChange(val)}
-                        disabled={disabled}
-                      />
-
-                      {this.renderTeamSelect(disabled)}
-                      {this.renderRuleName(disabled)}
-                    </PanelBody>
-                  </Panel>
-                )}
-                <SetConditionsListItem>
-                  {t('Set conditions')}
-                  <SetupAlertIntegrationButton
-                    projectSlug={project.slug}
-                    organization={organization}
-                  />
-                </SetConditionsListItem>
-                <ConditionsPanel>
-                  <PanelBody>
-                    <Step>
-                      <StepConnector />
-
-                      <StepContainer>
-                        <ChevronContainer>
-                          <IconChevron
-                            color="gray200"
-                            isCircled
-                            direction="right"
-                            size="sm"
-                          />
-                        </ChevronContainer>
-
-                        <Feature features={['projects:alert-filters']} project={project}>
-                          {({hasFeature}) => (
+                  </SetConditionsListItem>
+                  <ContentIndent>
+                    <ConditionsPanel>
+                      <PanelBody>
+                        <Step>
+                          <StepConnector />
+                          <StepContainer>
+                            <ChevronContainer>
+                              <IconChevron
+                                color="gray200"
+                                isCircled
+                                direction="right"
+                                size="sm"
+                              />
+                            </ChevronContainer>
                             <StepContent>
                               <StepLead>
                                 {tct(
@@ -973,27 +1194,24 @@ class IssueRuleEditor extends AsyncView<Props, State> {
                                           className={classNames({
                                             error: this.hasError('actionMatch'),
                                           })}
-                                          inline={false}
                                           styles={{
                                             control: provided => ({
                                               ...provided,
-                                              minHeight: '20px',
-                                              height: '20px',
+                                              minHeight: '21px',
+                                              height: '21px',
                                             }),
                                           }}
+                                          inline={false}
                                           isSearchable={false}
                                           isClearable={false}
                                           name="actionMatch"
                                           required
                                           flexibleControlStateSize
-                                          options={
-                                            hasFeature
-                                              ? ACTION_MATCH_OPTIONS_MIGRATED
-                                              : ACTION_MATCH_OPTIONS
-                                          }
+                                          options={ACTION_MATCH_OPTIONS_MIGRATED}
                                           onChange={val =>
                                             this.handleChange('actionMatch', val)
                                           }
+                                          size="xs"
                                           disabled={disabled}
                                         />
                                       </EmbeddedWrapper>
@@ -1005,11 +1223,7 @@ class IssueRuleEditor extends AsyncView<Props, State> {
                                 nodes={this.getConditions()}
                                 items={conditions ?? []}
                                 selectType="grouped"
-                                placeholder={
-                                  hasFeature
-                                    ? t('Add optional trigger...')
-                                    : t('Add optional condition...')
-                                }
+                                placeholder={t('Add optional trigger...')}
                                 onPropertyChange={this.handleChangeConditionProperty}
                                 onAddRow={this.handleAddCondition}
                                 onResetRow={this.handleResetCondition}
@@ -1024,153 +1238,180 @@ class IssueRuleEditor extends AsyncView<Props, State> {
                                     </StyledAlert>
                                   )
                                 }
+                                incompatibleRule={incompatibleCondition}
                               />
                             </StepContent>
-                          )}
-                        </Feature>
-                      </StepContainer>
-                    </Step>
+                          </StepContainer>
+                        </Step>
 
-                    <Feature
-                      features={['organizations:alert-filters', 'projects:alert-filters']}
-                      organization={organization}
-                      project={project}
-                      requireAll={false}
-                    >
-                      <Step>
-                        <StepConnector />
+                        <Step>
+                          <StepConnector />
 
-                        <StepContainer>
-                          <ChevronContainer>
-                            <IconChevron
-                              color="gray200"
-                              isCircled
-                              direction="right"
-                              size="sm"
-                            />
-                          </ChevronContainer>
+                          <StepContainer>
+                            <ChevronContainer>
+                              <IconChevron
+                                color="gray200"
+                                isCircled
+                                direction="right"
+                                size="sm"
+                              />
+                            </ChevronContainer>
 
-                          <StepContent>
-                            <StepLead>
-                              {tct('[if:If] [selector] of these filters match', {
-                                if: <Badge />,
-                                selector: (
-                                  <EmbeddedWrapper>
-                                    <EmbeddedSelectField
-                                      className={classNames({
-                                        error: this.hasError('filterMatch'),
-                                      })}
-                                      inline={false}
-                                      styles={{
-                                        control: provided => ({
-                                          ...provided,
-                                          minHeight: '20px',
-                                          height: '20px',
-                                        }),
-                                      }}
-                                      isSearchable={false}
-                                      isClearable={false}
-                                      name="filterMatch"
-                                      required
-                                      flexibleControlStateSize
-                                      options={ACTION_MATCH_OPTIONS}
-                                      onChange={val =>
-                                        this.handleChange('filterMatch', val)
-                                      }
-                                      disabled={disabled}
-                                    />
-                                  </EmbeddedWrapper>
-                                ),
-                              })}
-                            </StepLead>
-                            <RuleNodeList
-                              nodes={this.state.configs?.filters ?? null}
-                              items={filters ?? []}
-                              placeholder={t('Add optional filter...')}
-                              onPropertyChange={this.handleChangeFilterProperty}
-                              onAddRow={this.handleAddFilter}
-                              onResetRow={this.handleResetFilter}
-                              onDeleteRow={this.handleDeleteFilter}
-                              organization={organization}
-                              project={project}
-                              disabled={disabled}
-                              error={
-                                this.hasError('filters') && (
-                                  <StyledAlert type="error">
-                                    {detailedError?.filters[0]}
-                                  </StyledAlert>
-                                )
-                              }
-                            />
-                          </StepContent>
-                        </StepContainer>
-                      </Step>
-                    </Feature>
+                            <StepContent>
+                              <StepLead>
+                                {tct('[if:If][selector] of these filters match', {
+                                  if: <Badge />,
+                                  selector: (
+                                    <EmbeddedWrapper>
+                                      <EmbeddedSelectField
+                                        className={classNames({
+                                          error: this.hasError('filterMatch'),
+                                        })}
+                                        styles={{
+                                          control: provided => ({
+                                            ...provided,
+                                            minHeight: '21px',
+                                            height: '21px',
+                                          }),
+                                        }}
+                                        inline={false}
+                                        isSearchable={false}
+                                        isClearable={false}
+                                        name="filterMatch"
+                                        required
+                                        flexibleControlStateSize
+                                        options={ACTION_MATCH_OPTIONS}
+                                        onChange={val =>
+                                          this.handleChange('filterMatch', val)
+                                        }
+                                        size="xs"
+                                        disabled={disabled}
+                                      />
+                                    </EmbeddedWrapper>
+                                  ),
+                                })}
+                              </StepLead>
+                              <RuleNodeList
+                                nodes={this.state.configs?.filters ?? null}
+                                items={filters ?? []}
+                                placeholder={t('Add optional filter...')}
+                                onPropertyChange={this.handleChangeFilterProperty}
+                                onAddRow={this.handleAddFilter}
+                                onResetRow={this.handleResetFilter}
+                                onDeleteRow={this.handleDeleteFilter}
+                                organization={organization}
+                                project={project}
+                                disabled={disabled}
+                                error={
+                                  this.hasError('filters') && (
+                                    <StyledAlert type="error">
+                                      {detailedError?.filters[0]}
+                                    </StyledAlert>
+                                  )
+                                }
+                                incompatibleRule={incompatibleFilter}
+                              />
+                            </StepContent>
+                          </StepContainer>
+                        </Step>
 
-                    <Step>
-                      <StepContainer>
-                        <ChevronContainer>
-                          <IconChevron
-                            isCircled
-                            color="gray200"
-                            direction="right"
-                            size="sm"
-                          />
-                        </ChevronContainer>
-                        <StepContent>
-                          <StepLead>
-                            {tct('[then:Then] perform these actions', {
-                              then: <Badge />,
-                            })}
-                          </StepLead>
+                        <Step>
+                          <StepContainer>
+                            <ChevronContainer>
+                              <IconChevron
+                                isCircled
+                                color="gray200"
+                                direction="right"
+                                size="sm"
+                              />
+                            </ChevronContainer>
+                            <StepContent>
+                              <StepLead>
+                                {tct('[then:Then] perform these actions', {
+                                  then: <Badge />,
+                                })}
+                              </StepLead>
 
-                          <RuleNodeList
-                            nodes={this.state.configs?.actions ?? null}
-                            selectType="grouped"
-                            items={actions ?? []}
-                            placeholder={t('Add action...')}
-                            onPropertyChange={this.handleChangeActionProperty}
-                            onAddRow={this.handleAddAction}
-                            onResetRow={this.handleResetAction}
-                            onDeleteRow={this.handleDeleteAction}
-                            organization={organization}
-                            project={project}
-                            disabled={disabled}
-                            error={
-                              this.hasError('actions') && (
-                                <StyledAlert type="error">
-                                  {detailedError?.actions[0]}
-                                </StyledAlert>
-                              )
-                            }
-                          />
-                        </StepContent>
-                      </StepContainer>
-                    </Step>
-                  </PanelBody>
-                </ConditionsPanel>
-                <StyledListItem>
-                  {t('Set action interval')}
-                  <StyledFieldHelp>
-                    {t('Perform the actions above once this often for an issue')}
-                  </StyledFieldHelp>
-                </StyledListItem>
-                {this.hasAlertWizardV3 ? (
-                  this.renderActionInterval(disabled)
-                ) : (
-                  <Panel>
-                    <PanelBody>{this.renderActionInterval(disabled)}</PanelBody>
-                  </Panel>
-                )}
-                {this.hasAlertWizardV3 && (
-                  <Fragment>
-                    <StyledListItem>{t('Establish ownership')}</StyledListItem>
-                    {this.renderRuleName(disabled)}
-                    {this.renderTeamSelect(disabled)}
-                  </Fragment>
-                )}
-              </List>
-            </StyledForm>
+                              <RuleNodeList
+                                nodes={this.state.configs?.actions ?? null}
+                                selectType="grouped"
+                                items={actions ?? []}
+                                placeholder={t('Add action...')}
+                                onPropertyChange={this.handleChangeActionProperty}
+                                onAddRow={this.handleAddAction}
+                                onResetRow={this.handleResetAction}
+                                onDeleteRow={this.handleDeleteAction}
+                                organization={organization}
+                                project={project}
+                                disabled={disabled}
+                                ownership={ownership}
+                                error={
+                                  this.hasError('actions') && (
+                                    <StyledAlert type="error">
+                                      {detailedError?.actions[0]}
+                                    </StyledAlert>
+                                  )
+                                }
+                              />
+                              <Feature
+                                organization={organization}
+                                features={['issue-alert-test-notifications']}
+                              >
+                                <TestButtonWrapper>
+                                  <Button
+                                    type="button"
+                                    onClick={this.testNotifications}
+                                    disabled={
+                                      sendingNotification ||
+                                      rule?.actions === undefined ||
+                                      rule?.actions.length === 0
+                                    }
+                                  >
+                                    {t('Send Test Notification')}
+                                  </Button>
+                                </TestButtonWrapper>
+                              </Feature>
+                            </StepContent>
+                          </StepContainer>
+                        </Step>
+                      </PanelBody>
+                    </ConditionsPanel>
+                  </ContentIndent>
+                  <StyledListItem>
+                    <StepHeader>{t('Set action interval')}</StepHeader>
+                    <StyledFieldHelp>
+                      {t('Perform the actions above once this often for an issue')}
+                    </StyledFieldHelp>
+                  </StyledListItem>
+                  <ContentIndent>{this.renderActionInterval(disabled)}</ContentIndent>
+                  <Feature organization={organization} features={['issue-alert-preview']}>
+                    <StyledListItem>
+                      <StyledListItemSpaced>
+                        <div>
+                          <StepHeader>{t('Preview')}</StepHeader>
+                          <StyledFieldHelp>{this.renderPreviewText()}</StyledFieldHelp>
+                        </div>
+                      </StyledListItemSpaced>
+                    </StyledListItem>
+                    <ContentIndent>{this.renderPreviewTable()}</ContentIndent>
+                  </Feature>
+                  <StyledListItem>
+                    <StepHeader>{t('Add a name and owner')}</StepHeader>
+                    <StyledFieldHelp>
+                      {t(
+                        'This name will show up in notifications and the owner will give permissions to your whole team to edit and view this alert.'
+                      )}
+                    </StyledFieldHelp>
+                  </StyledListItem>
+                  <ContentIndent>
+                    <StyledFieldWrapper>
+                      {this.renderRuleName(disabled)}
+                      {this.renderTeamSelect(disabled)}
+                    </StyledFieldWrapper>
+                  </ContentIndent>
+                </List>
+              </StyledForm>
+            </Main>
           );
         }}
       </Access>
@@ -1180,8 +1421,85 @@ class IssueRuleEditor extends AsyncView<Props, State> {
 
 export default withOrganization(withProjects(IssueRuleEditor));
 
+export const findIncompatibleRules = (
+  rule: IssueAlertRule | UnsavedIssueAlertRule | null | undefined
+): IncompatibleRule => {
+  if (!rule) {
+    return {type: 'none', index: null};
+  }
+
+  const {conditions, filters} = rule;
+  // Check for more than one 'issue state change' condition
+  // or 'FirstSeenEventCondition' + 'EventFrequencyCondition'
+  if (rule.actionMatch === 'all') {
+    let firstSeen = 0;
+    let regression = 0;
+    let reappeared = 0;
+    let eventFrequency = 0;
+    for (let i = 0; i < conditions.length; i++) {
+      const id = conditions[i].id;
+      if (id.endsWith('FirstSeenEventCondition')) {
+        firstSeen = 1;
+      } else if (id.endsWith('RegressionEventCondition')) {
+        regression = 1;
+      } else if (id.endsWith('ReappearedEventCondition')) {
+        reappeared = 1;
+      } else if (id.endsWith('EventFrequencyCondition') && conditions[i].value >= 1) {
+        eventFrequency = 1;
+      }
+      if (firstSeen + regression + reappeared > 1 || firstSeen + eventFrequency > 1) {
+        return {type: 'condition', index: i};
+      }
+    }
+  }
+  // Check for 'FirstSeenEventCondition' and ('IssueOccurrencesFilter' or 'AgeComparisonFilter')
+  // Considers the case where filterMatch is 'any' and all filters are incompatible
+  const firstSeen = conditions.some(condition =>
+    condition.id.endsWith('FirstSeenEventCondition')
+  );
+  if (firstSeen && (rule.actionMatch === 'all' || conditions.length === 1)) {
+    let incompatibleFilters = 0;
+    for (let i = 0; i < filters.length; i++) {
+      const filter = filters[i];
+      const id = filter.id;
+      if (id.endsWith('IssueOccurrencesFilter')) {
+        if (
+          (rule.filterMatch === 'all' && filter.value > 1) ||
+          (rule.filterMatch === 'none' && filter.value <= 1)
+        ) {
+          return {type: 'filter', index: i};
+        }
+        if (rule.filterMatch === 'any' && filter.value > 1) {
+          incompatibleFilters += 1;
+        }
+      } else if (id.endsWith('AgeComparisonFilter')) {
+        if (rule.filterMatch !== 'none') {
+          if (
+            (filter.comparison_type === 'older' && filter.value >= 0) ||
+            (filter.comparison_type === 'newer' && filter.value <= 0)
+          ) {
+            if (rule.filterMatch === 'all') {
+              return {type: 'filter', index: i};
+            }
+            incompatibleFilters += 1;
+          }
+        } else if (
+          (filter.comparison_type === 'older' && filter.value < 0) ||
+          (filter.comparison_type === 'newer' && filter.value > 0)
+        ) {
+          return {type: 'filter', index: i};
+        }
+      }
+    }
+    if (incompatibleFilters === filters.length) {
+      return {type: 'filter', index: incompatibleFilters - 1};
+    }
+  }
+  return {type: 'none', index: null};
+};
+
 // TODO(ts): Understand why styled is not correctly inheriting props here
-const StyledForm = styled(Form)<Form['props']>`
+const StyledForm = styled(Form)<FormProps>`
   position: relative;
 `;
 
@@ -1199,8 +1517,16 @@ const StyledListItem = styled(ListItem)`
   font-size: ${p => p.theme.fontSizeExtraLarge};
 `;
 
+const StyledListItemSpaced = styled('div')`
+  display: flex;
+  justify-content: space-between;
+`;
+
 const StyledFieldHelp = styled(FieldHelp)`
   margin-top: 0;
+  @media (max-width: ${p => p.theme.breakpoints.small}) {
+    margin-left: -${space(4)};
+  }
 `;
 
 const SetConditionsListItem = styled(StyledListItem)`
@@ -1213,6 +1539,10 @@ const Step = styled('div')`
   display: flex;
   align-items: flex-start;
   margin: ${space(4)} ${space(4)} ${space(3)} ${space(1)};
+`;
+
+const StepHeader = styled('h5')`
+  margin-bottom: ${space(1)};
 `;
 
 const StepContainer = styled('div')`
@@ -1236,6 +1566,15 @@ const StepConnector = styled('div')`
 
 const StepLead = styled('div')`
   margin-bottom: ${space(0.5)};
+  & > span {
+    display: flex;
+    align-items: center;
+    gap: ${space(0.5)};
+  }
+`;
+
+const TestButtonWrapper = styled('div')`
+  margin-top: ${space(1.5)};
 `;
 
 const ChevronContainer = styled('div')`
@@ -1245,7 +1584,6 @@ const ChevronContainer = styled('div')`
 `;
 
 const Badge = styled('span')`
-  display: inline-block;
   min-width: 56px;
   background-color: ${p => p.theme.purple300};
   padding: 0 ${space(0.75)};
@@ -1259,8 +1597,6 @@ const Badge = styled('span')`
 `;
 
 const EmbeddedWrapper = styled('div')`
-  display: inline-block;
-  margin: 0 ${space(0.5)};
   width: 80px;
 `;
 
@@ -1281,38 +1617,32 @@ const SettingsContainer = styled('div')`
   gap: ${space(1)};
 `;
 
-const StyledField = styled(Field)<{extraMargin?: boolean; hasAlertWizardV3?: boolean}>`
-  :last-child {
-    padding-bottom: ${space(2)};
-  }
+const StyledField = styled(Field)`
+  border-bottom: none;
+  padding: 0;
 
-  ${p =>
-    p.hasAlertWizardV3 &&
-    `
-    border-bottom: none;
+  & > div {
     padding: 0;
-
-    & > div {
-      padding: 0;
-      width: 100%;
-    }
-
-    margin-bottom: ${p.extraMargin ? '60px' : space(1)};
-  `}
+    width: 100%;
+  }
+  margin-bottom: ${space(1)};
 `;
 
-const StyledSelectField = styled(SelectField)<{hasAlertWizardV3?: boolean}>`
-  ${p =>
-    p.hasAlertWizardV3 &&
-    `
-    border-bottom: none;
-    padding: 0;
+const StyledFieldWrapper = styled('div')`
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: ${space(1)};
+  }
+  margin-bottom: 60px;
+`;
 
-    & > div {
-      padding: 0;
-      width: 100%;
-    }
+const ContentIndent = styled('div')`
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
+    margin-left: ${space(4)};
+  }
+`;
 
-    margin-bottom: ${space(1)};
-  `}
+const Main = styled(Layout.Main)`
+  padding: ${space(2)} ${space(4)};
 `;

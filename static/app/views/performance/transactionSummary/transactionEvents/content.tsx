@@ -4,8 +4,8 @@ import {Location} from 'history';
 import omit from 'lodash/omit';
 
 import Button from 'sentry/components/button';
+import CompactSelect from 'sentry/components/compactSelect';
 import DatePageFilter from 'sentry/components/datePageFilter';
-import DropdownControl, {DropdownItem} from 'sentry/components/dropdownControl';
 import EnvironmentPageFilter from 'sentry/components/environmentPageFilter';
 import SearchBar from 'sentry/components/events/searchBar';
 import * as Layout from 'sentry/components/layouts/thirds';
@@ -13,11 +13,13 @@ import PageFilterBar from 'sentry/components/organizations/pageFilterBar';
 import {normalizeDateTimeParams} from 'sentry/components/organizations/pageFilters/parse';
 import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
-import {Organization} from 'sentry/types';
+import {Organization, Project} from 'sentry/types';
 import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
 import EventView from 'sentry/utils/discover/eventView';
-import {WebVital} from 'sentry/utils/discover/fields';
+import {WebVital} from 'sentry/utils/fields';
 import {decodeScalar} from 'sentry/utils/queryString';
+import projectSupportsReplay from 'sentry/utils/replays/projectSupportsReplay';
+import {useRoutes} from 'sentry/utils/useRoutes';
 
 import Filter, {filterToSearchConditions, SpanOperationBreakdownFilter} from '../filter';
 import {SetStateAction} from '../types';
@@ -32,14 +34,17 @@ type Props = {
   onChangeEventsDisplayFilter: (eventsDisplayFilterName: EventsDisplayFilterName) => void;
   onChangeSpanOperationBreakdownFilter: (newFilter: SpanOperationBreakdownFilter) => void;
   organization: Organization;
+  projectId: string;
+  projects: Project[];
   setError: SetStateAction<string | undefined>;
   spanOperationBreakdownFilter: SpanOperationBreakdownFilter;
+  totalEventCount: string;
   transactionName: string;
   percentileValues?: Record<EventsDisplayFilterName, number>;
   webVital?: WebVital;
 };
 
-const TRANSACTIONS_LIST_TITLES: Readonly<string[]> = [
+export const TRANSACTIONS_LIST_TITLES: Readonly<string[]> = [
   t('event id'),
   t('user'),
   t('operation duration'),
@@ -57,13 +62,17 @@ function EventsContent(props: Props) {
     spanOperationBreakdownFilter,
     webVital,
     setError,
+    totalEventCount,
+    projectId,
+    projects,
   } = props;
-
+  const routes = useRoutes();
   const eventView = originalEventView.clone();
   const transactionsListTitles = TRANSACTIONS_LIST_TITLES.slice();
+  const project = projects.find(p => p.id === projectId);
 
   if (webVital) {
-    transactionsListTitles.splice(3, 0, t(webVital));
+    transactionsListTitles.splice(3, 0, webVital);
   }
 
   const spanOperationBreakdownConditions = filterToSearchConditions(
@@ -73,19 +82,29 @@ function EventsContent(props: Props) {
 
   if (spanOperationBreakdownConditions) {
     eventView.query = `${eventView.query} ${spanOperationBreakdownConditions}`.trim();
-    transactionsListTitles.splice(2, 1, t(`${spanOperationBreakdownFilter} duration`));
+    transactionsListTitles.splice(2, 1, t('%s duration', spanOperationBreakdownFilter));
+  }
+
+  const showReplayCol =
+    organization.features.includes('session-replay-ui') && projectSupportsReplay(project);
+
+  if (showReplayCol) {
+    transactionsListTitles.push(t('replay'));
   }
 
   return (
     <Layout.Main fullWidth>
       <Search {...props} />
       <EventsTable
+        totalEventCount={totalEventCount}
         eventView={eventView}
         organization={organization}
+        routes={routes}
         location={location}
         setError={setError}
         columnTitles={transactionsListTitles}
         transactionName={transactionName}
+        showReplayCol={showReplayCol}
       />
     </Layout.Main>
   );
@@ -149,24 +168,15 @@ function Search(props: Props) {
         fields={eventView.fields}
         onSearch={handleSearch}
       />
-      <DropdownControl
-        buttonProps={{prefix: t('Percentile')}}
-        label={eventsFilterOptions[eventsDisplayFilterName].label}
-      >
-        {Object.entries(eventsFilterOptions).map(([name, filter]) => {
-          return (
-            <DropdownItem
-              key={name}
-              onSelect={onChangeEventsDisplayFilter}
-              eventKey={name}
-              data-test-id={name}
-              isActive={eventsDisplayFilterName === name}
-            >
-              {filter.label}
-            </DropdownItem>
-          );
-        })}
-      </DropdownControl>
+      <CompactSelect
+        triggerProps={{prefix: t('Percentile')}}
+        value={eventsDisplayFilterName}
+        onChange={opt => onChangeEventsDisplayFilter(opt.value)}
+        options={Object.entries(eventsFilterOptions).map(([name, filter]) => ({
+          value: name as EventsDisplayFilterName,
+          label: filter.label,
+        }))}
+      />
       <Button
         to={eventView.getResultsViewUrlTarget(organization.slug)}
         onClick={handleDiscoverButtonClick}

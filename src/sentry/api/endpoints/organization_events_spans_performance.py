@@ -14,7 +14,8 @@ from snuba_sdk.conditions import Condition, Op
 from snuba_sdk.function import Function, Identifier, Lambda
 from snuba_sdk.orderby import Direction, OrderBy
 
-from sentry import eventstore, features
+from sentry import eventstore
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases import NoProjects, OrganizationEventsV2EndpointBase
 from sentry.api.paginator import GenericOffsetPaginator
 from sentry.api.serializers.rest_framework import ListField
@@ -81,15 +82,6 @@ SPAN_PERFORMANCE_COLUMNS: Dict[str, SpanPerformanceColumn] = {
 
 
 class OrganizationEventsSpansEndpointBase(OrganizationEventsV2EndpointBase):  # type: ignore
-    def has_feature(self, request: Request, organization: Organization) -> bool:
-        return bool(
-            features.has(
-                "organizations:performance-suspect-spans-view",
-                organization,
-                actor=request.user,
-            )
-        )
-
     def get_snuba_params(
         self, request: Request, organization: Organization, check_global_views: bool = True
     ) -> Dict[str, Any]:
@@ -147,10 +139,9 @@ class SpansPerformanceSerializer(serializers.Serializer):  # type: ignore
         return span_groups
 
 
+@region_silo_endpoint
 class OrganizationEventsSpansPerformanceEndpoint(OrganizationEventsSpansEndpointBase):
     def get(self, request: Request, organization: Organization) -> Response:
-        if not self.has_feature(request, organization):
-            return Response(status=404)
 
         try:
             params = self.get_snuba_params(request, organization)
@@ -221,10 +212,9 @@ class SpanSerializer(serializers.Serializer):  # type: ignore
             raise serializers.ValidationError(str(e))
 
 
+@region_silo_endpoint
 class OrganizationEventsSpansExamplesEndpoint(OrganizationEventsSpansEndpointBase):
     def get(self, request: Request, organization: Organization) -> Response:
-        if not self.has_feature(request, organization):
-            return Response(status=404)
 
         try:
             params = self.get_snuba_params(request, organization)
@@ -303,10 +293,9 @@ class SpanExamplesPaginator:
         )
 
 
+@region_silo_endpoint
 class OrganizationEventsSpansStatsEndpoint(OrganizationEventsSpansEndpointBase):
     def get(self, request: Request, organization: Organization) -> Response:
-        if not self.has_feature(request, organization):
-            return Response(status=404)
 
         serializer = SpanSerializer(data=request.GET)
         if not serializer.is_valid():

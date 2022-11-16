@@ -2,8 +2,10 @@ from unittest.mock import patch
 
 from sentry.models import Project
 from sentry.testutils import AcceptanceTestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class CreateProjectTest(AcceptanceTestCase):
     def setUp(self):
         super().setUp()
@@ -29,7 +31,7 @@ class CreateProjectTest(AcceptanceTestCase):
         self.browser.wait_until("#installation")
 
         project = Project.objects.get(organization=self.org)
-        assert project.name == "Java"
+        assert project.name == "java"
         assert project.platform == "java"
         assert project.teams.first() == self.team
         self.browser.snapshot(name="docs redirect")

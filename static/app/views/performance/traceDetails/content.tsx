@@ -1,5 +1,6 @@
 import {Component, createRef, Fragment} from 'react';
 import {RouteComponentProps} from 'react-router';
+import styled from '@emotion/styled';
 
 import Alert from 'sentry/components/alert';
 import GuideAnchor from 'sentry/components/assistant/guideAnchor';
@@ -11,6 +12,7 @@ import LoadingError from 'sentry/components/loadingError';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import TimeSince from 'sentry/components/timeSince';
 import {t, tct, tn} from 'sentry/locale';
+import space from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
 import {defined} from 'sentry/utils';
 import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
@@ -253,7 +255,7 @@ class TraceDetailsContent extends Component<Props, State> {
     } else if (roots > 1) {
       warning = (
         <Alert type="info" showIcon>
-          <ExternalLink href="https://docs.sentry.io/product/performance/trace-view/#multiple-roots">
+          <ExternalLink href="https://docs.sentry.io/product/sentry-basics/tracing/trace-view/#multiple-roots">
             {t('Multiple root transactions have been found with this trace ID.')}
           </ExternalLink>
         </Alert>
@@ -300,16 +302,18 @@ class TraceDetailsContent extends Component<Props, State> {
         {this.renderTraceWarnings()}
         {this.renderTraceHeader(traceInfo)}
         {this.renderSearchBar()}
-        <TraceView
-          filteredTransactionIds={this.state.filteredTransactionIds}
-          traceInfo={traceInfo}
-          location={location}
-          organization={organization}
-          traceEventView={traceEventView}
-          traceSlug={traceSlug}
-          traces={traces}
-          meta={meta}
-        />
+        <Margin>
+          <TraceView
+            filteredTransactionIds={this.state.filteredTransactionIds}
+            traceInfo={traceInfo}
+            location={location}
+            organization={organization}
+            traceEventView={traceEventView}
+            traceSlug={traceSlug}
+            traces={traces}
+            meta={meta}
+          />
+        </Margin>
       </Fragment>
     );
   }
@@ -333,6 +337,7 @@ class TraceDetailsContent extends Component<Props, State> {
           <Layout.HeaderActions>
             <ButtonBar gap={1}>
               <DiscoverButton
+                size="sm"
                 to={traceEventView.getResultsViewUrlTarget(organization.slug)}
                 onClick={() => {
                   trackAdvancedAnalyticsEvent(
@@ -355,5 +360,9 @@ class TraceDetailsContent extends Component<Props, State> {
     );
   }
 }
+
+const Margin = styled('div')`
+  margin-top: ${space(2)};
+`;
 
 export default TraceDetailsContent;

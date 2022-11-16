@@ -6,8 +6,10 @@ from django.utils import timezone
 from rest_framework.exceptions import ParseError, PermissionDenied
 from rest_framework.request import Request
 from rest_framework.response import Response
+from sentry_sdk import start_span
 
 from sentry import features, search
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases import OrganizationEventPermission, OrganizationEventsEndpointBase
 from sentry.api.event_search import SearchFilter
 from sentry.api.helpers.group_index import (
@@ -21,8 +23,8 @@ from sentry.api.helpers.group_index import (
 )
 from sentry.api.paginator import DateTimePaginator, Paginator
 from sentry.api.serializers import serialize
-from sentry.api.serializers.models.group import StreamGroupSerializerSnuba
-from sentry.api.utils import InvalidParams, get_date_range_from_params
+from sentry.api.serializers.models.group_stream import StreamGroupSerializerSnuba
+from sentry.api.utils import InvalidParams, get_date_range_from_stats_period
 from sentry.constants import ALLOWED_FUTURE_DELTA
 from sentry.exceptions import InvalidSearchQuery
 from sentry.models import (
@@ -134,6 +136,7 @@ def inbox_search(
     return results
 
 
+@region_silo_endpoint
 class OrganizationGroupIndexEndpoint(OrganizationEventsEndpointBase):
     permission_classes = (OrganizationEventPermission,)
     enforce_rate_limit = True
@@ -159,20 +162,21 @@ class OrganizationGroupIndexEndpoint(OrganizationEventsEndpointBase):
     def _search(
         self, request: Request, organization, projects, environments, extra_query_kwargs=None
     ):
-        query_kwargs = build_query_params_from_request(
-            request, organization, projects, environments
-        )
-        if extra_query_kwargs is not None:
-            assert "environment" not in extra_query_kwargs
-            query_kwargs.update(extra_query_kwargs)
+        with start_span(op="_search"):
+            query_kwargs = build_query_params_from_request(
+                request, organization, projects, environments
+            )
+            if extra_query_kwargs is not None:
+                assert "environment" not in extra_query_kwargs
+                query_kwargs.update(extra_query_kwargs)
 
-        query_kwargs["environments"] = environments if environments else None
-        if query_kwargs["sort_by"] == "inbox":
-            query_kwargs.pop("sort_by")
-            result = inbox_search(**query_kwargs)
-        else:
-            result = search.query(**query_kwargs)
-        return result, query_kwargs
+            query_kwargs["environments"] = environments if environments else None
+            if query_kwargs["sort_by"] == "inbox":
+                query_kwargs.pop("sort_by")
+                result = inbox_search(**query_kwargs)
+            else:
+                result = search.query(**query_kwargs)
+            return result, query_kwargs
 
     @track_slo_response("workflow")
     def get(self, request: Request, organization) -> Response:
@@ -220,7 +224,7 @@ class OrganizationGroupIndexEndpoint(OrganizationEventsEndpointBase):
         """
         stats_period = request.GET.get("groupStatsPeriod")
         try:
-            start, end = get_date_range_from_params(request.GET)
+            start, end = get_date_range_from_stats_period(request.GET)
         except InvalidParams as e:
             raise ParseError(detail=str(e))
 
@@ -268,14 +272,15 @@ class OrganizationGroupIndexEndpoint(OrganizationEventsEndpointBase):
                 # projects that the user is a member of. This gives us a better
                 # chance of returning the correct result, even if the wrong
                 # project is selected.
-                direct_hit_projects = set(project_ids) | {
-                    project.id for project in request.access.projects
-                }
+                direct_hit_projects = (
+                    set(project_ids) | request.access.project_ids_with_team_membership
+                )
                 groups = list(Group.objects.filter_by_event_id(direct_hit_projects, event_id))
                 if len(groups) == 1:
-                    response = Response(
-                        serialize(groups, request.user, serializer(matching_event_id=event_id))
-                    )
+                    serialized_groups = serialize(groups, request.user, serializer())
+                    if event_id:
+                        serialized_groups[0]["matchingEventId"] = event_id
+                    response = Response(serialized_groups)
                     response["X-Sentry-Direct-Hit"] = "1"
                     return response
 

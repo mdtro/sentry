@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-restricted-imports
 import {withRouter, WithRouterProps} from 'react-router';
 import styled from '@emotion/styled';
 import omit from 'lodash/omit';
@@ -7,10 +8,19 @@ import Button from 'sentry/components/button';
 import ButtonBar from 'sentry/components/buttonBar';
 import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
+import {Project} from 'sentry/types';
+import {isMobilePlatform} from 'sentry/utils/platform';
+import useOrganization from 'sentry/utils/useOrganization';
 
 const crashReportTypes = ['event.minidump', 'event.applecrashreport'];
+const SCREENSHOT_TYPE = 'event.screenshot';
 
-const GroupEventAttachmentsFilter = (props: WithRouterProps) => {
+type Props = {
+  project: Project;
+} & WithRouterProps;
+
+const GroupEventAttachmentsFilter = (props: Props) => {
+  const {project} = props;
   const {query, pathname} = props.location;
   const {types} = query;
   const allAttachmentsQuery = omit(query, 'types');
@@ -19,10 +29,19 @@ const GroupEventAttachmentsFilter = (props: WithRouterProps) => {
     types: crashReportTypes,
   };
 
+  const organization = useOrganization();
+
+  const onlyScreenshotQuery = {
+    ...query,
+    types: SCREENSHOT_TYPE,
+  };
+
   let activeButton = '';
 
   if (types === undefined) {
     activeButton = 'all';
+  } else if (types === SCREENSHOT_TYPE) {
+    activeButton = 'screenshot';
   } else if (xor(crashReportTypes, types).length === 0) {
     activeButton = 'onlyCrash';
   }
@@ -30,14 +49,20 @@ const GroupEventAttachmentsFilter = (props: WithRouterProps) => {
   return (
     <FilterWrapper>
       <ButtonBar merged active={activeButton}>
-        <Button barId="all" size="small" to={{pathname, query: allAttachmentsQuery}}>
+        <Button barId="all" size="sm" to={{pathname, query: allAttachmentsQuery}}>
           {t('All Attachments')}
         </Button>
-        <Button
-          barId="onlyCrash"
-          size="small"
-          to={{pathname, query: onlyCrashReportsQuery}}
-        >
+        {organization.features.includes('mobile-screenshot-gallery') &&
+          isMobilePlatform(project.platform) && (
+            <Button
+              barId="screenshot"
+              size="sm"
+              to={{pathname, query: onlyScreenshotQuery}}
+            >
+              {t('Screenshots')}
+            </Button>
+          )}
+        <Button barId="onlyCrash" size="sm" to={{pathname, query: onlyCrashReportsQuery}}>
           {t('Only Crash Reports')}
         </Button>
       </ButtonBar>
@@ -51,5 +76,5 @@ const FilterWrapper = styled('div')`
   margin-bottom: ${space(3)};
 `;
 
-export {crashReportTypes};
+export {crashReportTypes, SCREENSHOT_TYPE};
 export default withRouter(GroupEventAttachmentsFilter);

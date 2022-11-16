@@ -5,7 +5,8 @@ import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicato
 import {joinTeam} from 'sentry/actionCreators/teams';
 import {Client} from 'sentry/api';
 import Button from 'sentry/components/button';
-import SelectControl from 'sentry/components/forms/selectControl';
+import EmptyMessage from 'sentry/components/emptyMessage';
+import SelectControl from 'sentry/components/forms/controls/selectControl';
 import {Panel} from 'sentry/components/panels';
 import {IconFlag} from 'sentry/icons';
 import {t} from 'sentry/locale';
@@ -13,7 +14,6 @@ import TeamStore from 'sentry/stores/teamStore';
 import space from 'sentry/styles/space';
 import {Organization, Project} from 'sentry/types';
 import withApi from 'sentry/utils/withApi';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
 
 type Props = {
   api: Client;
@@ -121,7 +121,7 @@ class MissingProjectMembership extends Component<Props, State> {
   getPendingTeamOption = (team: string) => {
     return {
       value: team,
-      label: <DisabledLabel>{t(`#${team}`)}</DisabledLabel>,
+      label: <DisabledLabel>{`#${team}`}</DisabledLabel>,
     };
   };
 
@@ -136,7 +136,7 @@ class MissingProjectMembership extends Component<Props, State> {
         label: t('Request Access'),
         options: this.getTeamsForAccess()[0].map(request => ({
           value: request,
-          label: t(`#${request}`),
+          label: `#${request}`,
         })),
       },
       {

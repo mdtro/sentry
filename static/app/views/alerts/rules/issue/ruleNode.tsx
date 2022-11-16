@@ -5,14 +5,14 @@ import {openModal} from 'sentry/actionCreators/modal';
 import Alert from 'sentry/components/alert';
 import Button from 'sentry/components/button';
 import FeatureBadge from 'sentry/components/featureBadge';
-import Input from 'sentry/components/forms/controls/input';
-import SelectControl from 'sentry/components/forms/selectControl';
+import SelectControl from 'sentry/components/forms/controls/selectControl';
+import Input from 'sentry/components/input';
 import ExternalLink from 'sentry/components/links/externalLink';
 import {releaseHealth} from 'sentry/data/platformCategories';
 import {IconDelete, IconSettings} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
 import space from 'sentry/styles/space';
-import {Choices, Organization, Project} from 'sentry/types';
+import {Choices, IssueOwnership, Organization, Project} from 'sentry/types';
 import {
   AssigneeTargetType,
   IssueAlertRuleAction,
@@ -226,7 +226,9 @@ interface Props {
   onReset: (rowIndex: number, name: string, value: string) => void;
   organization: Organization;
   project: Project;
+  incompatibleRule?: boolean;
   node?: IssueAlertRuleActionTemplate | IssueAlertRuleConditionTemplate | null;
+  ownership?: null | IssueOwnership;
 }
 
 function RuleNode({
@@ -239,6 +241,8 @@ function RuleNode({
   onDelete,
   onPropertyChange,
   onReset,
+  ownership,
+  incompatibleRule,
 }: Props) {
   const handleDelete = useCallback(() => {
     onDelete(index);
@@ -335,7 +339,7 @@ function RuleNode({
               "This project doesn't support sessions. [link:View supported platforms]",
               {
                 link: (
-                  <ExternalLink href="https://docs.sentry.io/product/releases/health/setup/" />
+                  <ExternalLink href="https://docs.sentry.io/product/releases/setup/#release-health" />
                 ),
               }
             )}
@@ -365,7 +369,7 @@ function RuleNode({
           trailingItems={
             <Button
               href="https://docs.sentry.io/product/integrations/notification-incidents/slack/#rate-limiting-error"
-              size="xsmall"
+              size="xs"
             >
               {t('Learn More')}
             </Button>
@@ -382,28 +386,77 @@ function RuleNode({
     ) {
       return (
         <MarginlessAlert type="warning">
-          {tct(
-            'If there are no matching [issueOwners], ownership is determined by the [ownershipSettings].',
-            {
-              issueOwners: (
-                <ExternalLink href="https://docs.sentry.io/product/error-monitoring/issue-owners/">
-                  {t('issue owners')}
-                </ExternalLink>
-              ),
-              ownershipSettings: (
-                <ExternalLink
-                  href={`/settings/${organization.slug}/projects/${project.slug}/ownership/`}
-                >
-                  {t('ownership settings')}
-                </ExternalLink>
-              ),
-            }
-          )}
+          {!ownership
+            ? tct(
+                'If there are no matching [issueOwners], ownership is determined by the [ownershipSettings].',
+                {
+                  issueOwners: (
+                    <ExternalLink href="https://docs.sentry.io/product/error-monitoring/issue-owners/">
+                      {t('issue owners')}
+                    </ExternalLink>
+                  ),
+                  ownershipSettings: (
+                    <ExternalLink
+                      href={`/settings/${organization.slug}/projects/${project.slug}/ownership/`}
+                    >
+                      {t('ownership settings')}
+                    </ExternalLink>
+                  ),
+                }
+              )
+            : ownership.fallthrough
+            ? tct(
+                'If there are no matching [issueOwners], all project members will receive this alert. To change this behavior, see [ownershipSettings].',
+                {
+                  issueOwners: (
+                    <ExternalLink href="https://docs.sentry.io/product/error-monitoring/issue-owners/">
+                      {t('issue owners')}
+                    </ExternalLink>
+                  ),
+                  ownershipSettings: (
+                    <ExternalLink
+                      href={`/settings/${organization.slug}/projects/${project.slug}/ownership/`}
+                    >
+                      {t('ownership settings')}
+                    </ExternalLink>
+                  ),
+                }
+              )
+            : tct(
+                'If there are no matching [issueOwners], this action will have no effect. To change this behavior, see [ownershipSettings].',
+                {
+                  issueOwners: (
+                    <ExternalLink href="https://docs.sentry.io/product/error-monitoring/issue-owners/">
+                      {t('issue owners')}
+                    </ExternalLink>
+                  ),
+                  ownershipSettings: (
+                    <ExternalLink
+                      href={`/settings/${organization.slug}/projects/${project.slug}/ownership/`}
+                    >
+                      {t('ownership settings')}
+                    </ExternalLink>
+                  ),
+                }
+              )}
         </MarginlessAlert>
       );
     }
 
     return null;
+  }
+
+  function renderIncompatibleRuleBanner() {
+    if (!incompatibleRule) {
+      return null;
+    }
+    return (
+      <MarginlessAlert type="error" showIcon>
+        {t(
+          'This condition conflicts with other condition(s) above. Please select a different condition.'
+        )}
+      </MarginlessAlert>
+    );
   }
 
   /**
@@ -465,7 +518,7 @@ function RuleNode({
           {renderRow()}
           {ticketRule && node && (
             <Button
-              size="small"
+              size="sm"
               icon={<IconSettings size="xs" />}
               type="button"
               onClick={() =>
@@ -488,7 +541,7 @@ function RuleNode({
           )}
           {sentryAppRule && node && (
             <Button
-              size="small"
+              size="sm"
               icon={<IconSettings size="xs" />}
               type="button"
               disabled={Boolean(data.disabled) || disabled}
@@ -517,10 +570,11 @@ function RuleNode({
           aria-label={t('Delete Node')}
           onClick={handleDelete}
           type="button"
-          size="small"
+          size="sm"
           icon={<IconDelete />}
         />
       </RuleRow>
+      {renderIncompatibleRuleBanner()}
       {conditionallyRenderHelpfulBanner()}
     </RuleRowContainer>
   );
@@ -531,11 +585,13 @@ export default RuleNode;
 const InlineInput = styled(Input)`
   width: auto;
   height: 28px;
+  min-height: 28px;
 `;
 
 const InlineNumberInput = styled(Input)`
   width: 90px;
   height: 28px;
+  min-height: 28px;
 `;
 
 const InlineSelectControl = styled(SelectControl)`

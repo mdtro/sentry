@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from django.urls import reverse
 
 from sentry.models import (
@@ -8,9 +10,11 @@ from sentry.models import (
     DashboardWidgetTypes,
 )
 from sentry.testutils import OrganizationDashboardWidgetTestCase
-from sentry.testutils.helpers.datetime import before_now
+from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class OrganizationDashboardsTest(OrganizationDashboardWidgetTestCase):
     def setUp(self):
         super().setUp()
@@ -475,6 +479,77 @@ class OrganizationDashboardsTest(OrganizationDashboardWidgetTestCase):
         response = self.do_request("post", self.url, data=data)
         assert response.status_code == 400, response.data
 
+    def test_post_dashboard_with_filters(self):
+        project1 = self.create_project(name="foo", organization=self.organization)
+        project2 = self.create_project(name="bar", organization=self.organization)
+
+        response = self.do_request(
+            "post",
+            self.url,
+            data={
+                "title": "Dashboard from Post",
+                "projects": [project1.id, project2.id],
+                "environment": ["alpha"],
+                "period": "7d",
+                "filters": {"release": ["v1"], "releaseId": ["1"]},
+            },
+        )
+        assert response.status_code == 201
+        assert response.data["projects"] == [project1.id, project2.id]
+        assert response.data["environment"] == ["alpha"]
+        assert response.data["period"] == "7d"
+        assert response.data["filters"]["release"] == ["v1"]
+        assert response.data["filters"]["releaseId"] == ["1"]
+
+    def test_post_with_start_and_end_filter(self):
+        start = iso_format(datetime.now() - timedelta(seconds=10))
+        end = iso_format(datetime.now())
+        response = self.do_request(
+            "post",
+            self.url,
+            data={"title": "Dashboard from Post", "start": start, "end": end, "utc": True},
+        )
+        assert response.status_code == 201
+        assert response.data["start"].strftime("%Y-%m-%dT%H:%M:%S") == start
+        assert response.data["end"].strftime("%Y-%m-%dT%H:%M:%S") == end
+        assert response.data["utc"]
+
+    def test_post_with_start_and_end_filter_and_utc_false(self):
+        start = iso_format(datetime.now() - timedelta(seconds=10))
+        end = iso_format(datetime.now())
+        response = self.do_request(
+            "post",
+            self.url,
+            data={"title": "Dashboard from Post", "start": start, "end": end, "utc": False},
+        )
+        assert response.status_code == 201
+        assert response.data["start"].strftime("%Y-%m-%dT%H:%M:%S") == start
+        assert response.data["end"].strftime("%Y-%m-%dT%H:%M:%S") == end
+        assert not response.data["utc"]
+
+    def test_post_dashboard_with_invalid_project_filter(self):
+        other_org = self.create_organization()
+        other_project = self.create_project(name="other", organization=other_org)
+        response = self.do_request(
+            "post",
+            self.url,
+            data={
+                "title": "Dashboard from Post",
+                "projects": [other_project.id],
+            },
+        )
+        assert response.status_code == 403
+
+    def test_post_dashboard_with_invalid_start_end_filter(self):
+        start = iso_format(datetime.now())
+        end = iso_format(datetime.now() - timedelta(seconds=10))
+        response = self.do_request(
+            "post",
+            self.url,
+            data={"title": "Dashboard from Post", "start": start, "end": end},
+        )
+        assert response.status_code == 400
+
     def test_add_widget_with_limit(self):
         data = {
             "title": "Dashboard from Post",
@@ -644,6 +719,35 @@ class OrganizationDashboardsTest(OrganizationDashboardWidgetTestCase):
             queries = actual_widget.dashboardwidgetquery_set.all()
             for expected_query, actual_query in zip(expected_widget["queries"], queries):
                 self.assert_serialized_widget_query(expected_query, actual_query)
+
+    def test_post_dashboard_with_greater_than_max_widgets_not_allowed(self):
+        data = {
+            "title": "Dashboard with way too many widgets",
+            "widgets": [
+                {
+                    "displayType": "line",
+                    "interval": "5m",
+                    "title": f"Widget {i}",
+                    "queries": [
+                        {
+                            "name": "Transactions",
+                            "fields": ["count()"],
+                            "columns": ["transaction"],
+                            "aggregates": ["count()"],
+                            "conditions": "event.type:transaction",
+                        }
+                    ],
+                    "layout": {"x": 0, "y": 0, "w": 1, "h": 1, "minH": 2},
+                }
+                for i in range(Dashboard.MAX_WIDGETS + 1)
+            ],
+        }
+        response = self.do_request("post", self.url, data=data)
+        assert response.status_code == 400, response.data
+        assert (
+            f"Number of widgets must be less than {Dashboard.MAX_WIDGETS}"
+            in response.content.decode()
+        )
 
     def test_invalid_data(self):
         response = self.do_request("post", self.url, data={"malformed-data": "Dashboard from Post"})

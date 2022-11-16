@@ -1,8 +1,8 @@
-import {Fragment} from 'react';
+import {Fragment, useContext} from 'react';
 import styled from '@emotion/styled';
 import sortBy from 'lodash/sortBy';
 
-import DropdownMenu from 'sentry/components/dropdownMenu';
+import DeprecatedDropdownMenu from 'sentry/components/deprecatedDropdownMenu';
 import SidebarDropdownMenu from 'sentry/components/sidebar/sidebarDropdownMenu.styled';
 import SidebarMenuItem from 'sentry/components/sidebar/sidebarMenuItem';
 import SidebarOrgSummary from 'sentry/components/sidebar/sidebarOrgSummary';
@@ -10,19 +10,90 @@ import {IconAdd, IconChevron} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
 import {OrganizationSummary} from 'sentry/types';
+import shouldUseLegacyRoute from 'sentry/utils/shouldUseLegacyRoute';
+import useResolveRoute from 'sentry/utils/useResolveRoute';
 import withOrganizations from 'sentry/utils/withOrganizations';
+import {OrganizationContext} from 'sentry/views/organizationContext';
 
 import Divider from './divider.styled';
+
+function OrganizationMenuItem({organization}: {organization: OrganizationSummary}) {
+  const currentOrganization = useContext(OrganizationContext);
+  const {slug} = organization;
+
+  const menuItemProps: Partial<React.ComponentProps<typeof SidebarMenuItem>> = {};
+
+  const route = useResolveRoute(`/organizations/${slug}/issues/`, organization);
+
+  if (shouldUseLegacyRoute(organization)) {
+    if (currentOrganization?.features.includes('customer-domains')) {
+      // Case:
+      // - Current org has customer domains, so we expect the current url be current-org-slug.sentry.io.
+      // - Switching to sentry.io/org-slug requires href instead of a React router change.
+      menuItemProps.href = route;
+      menuItemProps.openInNewTab = false;
+    } else {
+      // Case:
+      // - Current org does not have customer domains, so we expect the current url be sentry.io/current-org-slug
+      // - Switching to sentry.io/org-slug only requires a React router change.
+      menuItemProps.to = route;
+    }
+  } else {
+    // Case:
+    // - Switching to org-slug.sentry.io requires href instead of a React router change, regardless if current org has
+    //   customer domains or not.
+    menuItemProps.href = route;
+    menuItemProps.openInNewTab = false;
+  }
+
+  return (
+    <SidebarMenuItem {...menuItemProps}>
+      <SidebarOrgSummary organization={organization} />
+    </SidebarMenuItem>
+  );
+}
+
+function CreateOrganization({canCreateOrganization}: {canCreateOrganization: boolean}) {
+  const currentOrganization = useContext(OrganizationContext);
+  const route = useResolveRoute('/organizations/new/');
+
+  if (!canCreateOrganization) {
+    return null;
+  }
+
+  const menuItemProps: Partial<React.ComponentProps<typeof SidebarMenuItem>> = {};
+
+  if (currentOrganization?.features.includes('customer-domains')) {
+    menuItemProps.href = route;
+    menuItemProps.openInNewTab = false;
+  } else {
+    menuItemProps.to = route;
+  }
+
+  return (
+    <SidebarMenuItem
+      data-test-id="sidebar-create-org"
+      style={{alignItems: 'center'}}
+      {...menuItemProps}
+    >
+      <MenuItemLabelWithIcon>
+        <StyledIconAdd />
+        <span>{t('Create a new organization')}</span>
+      </MenuItemLabelWithIcon>
+    </SidebarMenuItem>
+  );
+}
 
 type Props = {
   canCreateOrganization: boolean;
   organizations: OrganizationSummary[];
 };
+
 /**
  * Switch Organization Menu Label + Sub Menu
  */
 const SwitchOrganization = ({organizations, canCreateOrganization}: Props) => (
-  <DropdownMenu isNestedDropdown>
+  <DeprecatedDropdownMenu isNestedDropdown>
     {({isOpen, getMenuProps, getActorProps}) => (
       <Fragment>
         <SwitchOrganizationMenuActor
@@ -52,35 +123,23 @@ const SwitchOrganization = ({organizations, canCreateOrganization}: Props) => (
           >
             <OrganizationList role="list">
               {sortBy(organizations, ['status.id']).map(organization => {
-                const url = `/organizations/${organization.slug}/`;
-
                 return (
-                  <SidebarMenuItem key={organization.slug} to={url}>
-                    <SidebarOrgSummary organization={organization} />
-                  </SidebarMenuItem>
+                  <OrganizationMenuItem
+                    key={organization.slug}
+                    organization={organization}
+                  />
                 );
               })}
             </OrganizationList>
             {organizations && !!organizations.length && canCreateOrganization && (
               <Divider css={{marginTop: 0}} />
             )}
-            {canCreateOrganization && (
-              <SidebarMenuItem
-                data-test-id="sidebar-create-org"
-                to="/organizations/new/"
-                style={{alignItems: 'center'}}
-              >
-                <MenuItemLabelWithIcon>
-                  <StyledIconAdd />
-                  <span>{t('Create a new organization')}</span>
-                </MenuItemLabelWithIcon>
-              </SidebarMenuItem>
-            )}
+            {<CreateOrganization canCreateOrganization={canCreateOrganization} />}
           </SwitchOrganizationMenu>
         )}
       </Fragment>
     )}
-  </DropdownMenu>
+  </DeprecatedDropdownMenu>
 );
 
 const SwitchOrganizationContainer = withOrganizations(SwitchOrganization);

@@ -1,7 +1,10 @@
 from unittest.mock import Mock, patch
 
+from sentry.rules.filters.issue_category import IssueCategoryFilter
 from sentry.rules.registry import RuleRegistry
 from sentry.testutils import APITestCase
+from sentry.testutils.helpers import with_feature
+from sentry.testutils.silo import region_silo_test
 
 EMAIL_ACTION = "sentry.mail.actions.NotifyEmailAction"
 APP_ACTION = "sentry.rules.actions.notify_event_service.NotifyEventServiceAction"
@@ -9,6 +12,7 @@ JIRA_ACTION = "sentry.integrations.jira.notify_action.JiraCreateTicketAction"
 SENTRY_APP_ALERT_ACTION = "sentry.rules.actions.notify_event_sentry_app.NotifyEventSentryAppAction"
 
 
+@region_silo_test
 class ProjectRuleConfigurationTest(APITestCase):
     endpoint = "sentry-api-0-project-rules-configuration"
 
@@ -157,3 +161,13 @@ class ProjectRuleConfigurationTest(APITestCase):
         } in response.data["actions"]
         assert len(response.data["conditions"]) == 7
         assert len(response.data["filters"]) == 7
+
+    @with_feature("organizations:performance-issues")
+    def test_issue_type_and_category_filter_feature(self):
+        response = self.get_success_response(self.organization.slug, self.project.slug)
+        assert len(response.data["actions"]) == 7
+        assert len(response.data["conditions"]) == 7
+        assert len(response.data["filters"]) == 8
+
+        filter_ids = {f["id"] for f in response.data["filters"]}
+        assert IssueCategoryFilter.id in filter_ids

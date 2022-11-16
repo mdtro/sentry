@@ -1,13 +1,22 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from sentry.api import client
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.group import GroupEndpoint
+from sentry.api.endpoints.project_event_details import wrap_event_response
 from sentry.api.helpers.environments import get_environments
 
+if TYPE_CHECKING:
+    from sentry.models.group import Group
 
-class GroupEventsOldestEndpoint(GroupEndpoint):
-    def get(self, request: Request, group) -> Response:
+
+@region_silo_endpoint
+class GroupEventsOldestEndpoint(GroupEndpoint):  # type: ignore
+    def get(self, request: Request, group: Group) -> Response:
         """
         Retrieve the Oldest Event for an Issue
         ``````````````````````````````````````
@@ -24,11 +33,5 @@ class GroupEventsOldestEndpoint(GroupEndpoint):
         if not event:
             return Response({"detail": "No events found for group"}, status=404)
 
-        try:
-            return client.get(
-                f"/projects/{event.organization.slug}/{event.project.slug}/events/{event.event_id}/",
-                request=request,
-                data={"environment": environments, "group_id": event.group_id},
-            )
-        except client.ApiError as e:
-            return Response(e.body, status=e.status_code)
+        data = wrap_event_response(request.user, event, event.project, environments)
+        return Response(data)

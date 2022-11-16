@@ -5,6 +5,7 @@ from sentry.db.models import (
     BoundedPositiveIntegerField,
     FlexibleForeignKey,
     Model,
+    control_silo_with_replication_model,
     sane_repr,
 )
 from sentry.notifications.manager import NotificationsManager
@@ -19,6 +20,7 @@ from sentry.notifications.types import (
 from sentry.types.integrations import ExternalProviders, get_provider_name
 
 
+@control_silo_with_replication_model
 class NotificationSetting(Model):
     """
     A setting of when to notify a user or team about activity within the app.
@@ -63,6 +65,7 @@ class NotificationSetting(Model):
         choices=(
             (ExternalProviders.EMAIL, "email"),
             (ExternalProviders.SLACK, "slack"),
+            (ExternalProviders.MSTEAMS, "msteams"),
         ),
         null=False,
     )
@@ -78,6 +81,8 @@ class NotificationSetting(Model):
             (NotificationSettingTypes.QUOTA_TRANSACTIONS, "quotaTransactions"),
             (NotificationSettingTypes.QUOTA_ATTACHMENTS, "quotaAttacments"),
             (NotificationSettingTypes.QUOTA_WARNINGS, "quotaWarnings"),
+            (NotificationSettingTypes.QUOTA_SPEND_ALLOCATIONS, "quotaSpendAllocations"),
+            (NotificationSettingTypes.SPIKE_PROTECTION, "spikeProtection"),
         ),
         null=False,
     )

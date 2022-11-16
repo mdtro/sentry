@@ -28,7 +28,7 @@ function LoadingError({
       className={className}
       trailingItems={
         onRetry && (
-          <Button onClick={onRetry} type="button" priority="default" size="small">
+          <Button onClick={onRetry} type="button" priority="default" size="sm">
             {t('Retry')}
           </Button>
         )
@@ -42,7 +42,7 @@ function LoadingError({
 export default LoadingError;
 
 const StyledAlert = styled(Alert)`
-  ${/* sc-selector */ Panel} & {
+  ${Panel} & {
     border-radius: 0;
     border-width: 1px 0;
   }

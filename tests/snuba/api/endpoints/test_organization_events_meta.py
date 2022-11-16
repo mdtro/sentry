@@ -1,13 +1,18 @@
 from unittest import mock
 
+import pytest
 from django.urls import reverse
 from pytz import utc
 from rest_framework.exceptions import ParseError
 
 from sentry.testutils import APITestCase, SnubaTestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
+
+pytestmark = pytest.mark.sentry_metrics
 
 
+@region_silo_test
 class OrganizationEventsMetaEndpoint(APITestCase, SnubaTestCase):
     def setUp(self):
         super().setUp()
@@ -137,7 +142,7 @@ class OrganizationEventsMetaEndpoint(APITestCase, SnubaTestCase):
                 )
         assert response.status_code == 400
 
-    @mock.patch("sentry.search.events.builder.raw_snql_query")
+    @mock.patch("sentry.search.events.builder.discover.raw_snql_query")
     def test_handling_snuba_errors(self, mock_snql_query):
         mock_snql_query.side_effect = ParseError("test")
         with self.feature(self.features):
@@ -179,6 +184,7 @@ class OrganizationEventsMetaEndpoint(APITestCase, SnubaTestCase):
             assert len(mock_quantize.mock_calls) == 2
 
 
+@region_silo_test
 class OrganizationEventsRelatedIssuesEndpoint(APITestCase, SnubaTestCase):
     def setUp(self):
         super().setUp()

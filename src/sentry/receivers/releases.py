@@ -1,9 +1,10 @@
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import F
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_save
 from django.utils import timezone
 
-from sentry import analytics
+from sentry import analytics, features
 from sentry.models import (
     Activity,
     Commit,
@@ -16,9 +17,9 @@ from sentry.models import (
     Project,
     PullRequest,
     Release,
+    ReleaseActivity,
     ReleaseProject,
     Repository,
-    UserOption,
     remove_group_from_inbox,
 )
 from sentry.models.grouphistory import (
@@ -27,16 +28,26 @@ from sentry.models.grouphistory import (
     record_group_history_from_activity_type,
 )
 from sentry.notifications.types import GroupSubscriptionReason
+from sentry.services.hybrid_cloud.user import APIUser
+from sentry.services.hybrid_cloud.user_option import user_option_service
 from sentry.signals import buffer_incr_complete, issue_resolved
 from sentry.tasks.clear_expired_resolutions import clear_expired_resolutions
 from sentry.types.activity import ActivityType
+from sentry.types.releaseactivity import ReleaseActivityType
+
+
+def validate_release_empty_version(instance: Release, **kwargs):
+    if not Release.is_valid_version(instance.version):
+        raise ValidationError(
+            f"release_id({instance.id}) failed to save because of invalid version"
+        )
 
 
 def resolve_group_resolutions(instance, created, **kwargs):
     if not created:
         return
 
-    clear_expired_resolutions.delay(release_id=instance.id)
+    transaction.on_commit(lambda: clear_expired_resolutions.delay(release_id=instance.id))
 
 
 def remove_resolved_link(link):
@@ -102,10 +113,15 @@ def resolved_in_commit(instance, created, **kwargs):
                 acting_user = None
 
                 if user_list:
-                    acting_user = user_list[0]
-                    self_assign_issue = UserOption.objects.get_value(
-                        user=acting_user, key="self_assign_issue", default="0"
+                    acting_user: APIUser = user_list[0]
+                    # TODO(hybrid-cloud): rely on user options being returned in the user service get calls.
+                    user_options = user_option_service.get(
+                        [acting_user.id], "self_assign_issue", None
                     )
+                    if len(user_options) > 0:
+                        self_assign_issue = user_options[0].value
+                    else:
+                        self_assign_issue = "0"
                     if self_assign_issue == "1" and not group.assignee_set.exists():
                         GroupAssignee.objects.assign(
                             group=group, assigned_to=acting_user, acting_user=acting_user
@@ -115,17 +131,23 @@ def resolved_in_commit(instance, created, **kwargs):
                     # subscribe every user
                     for user in user_list:
                         GroupSubscription.objects.subscribe(
-                            user=user, group=group, reason=GroupSubscriptionReason.status_change
+                            user=user,
+                            group=group,
+                            reason=GroupSubscriptionReason.status_change,
                         )
 
-                Activity.objects.create(
-                    project_id=group.project_id,
-                    group=group,
-                    type=ActivityType.SET_RESOLVED_IN_COMMIT.value,
-                    ident=instance.id,
-                    user=acting_user,
-                    data={"commit": instance.id},
-                )
+                activity_kwargs = {
+                    "project_id": group.project_id,
+                    "group": group,
+                    "type": ActivityType.SET_RESOLVED_IN_COMMIT.value,
+                    "ident": instance.id,
+                    "data": {"commit": instance.id},
+                }
+                if acting_user is not None:
+                    activity_kwargs["user_id"] = acting_user.id
+
+                Activity.objects.create(**activity_kwargs)
+
                 Group.objects.filter(id=group.id).update(
                     status=GroupStatus.RESOLVED, resolved_at=current_datetime
                 )
@@ -195,7 +217,7 @@ def resolved_in_pull_request(instance, created, **kwargs):
                     user_list = ()
                 acting_user = None
                 if user_list:
-                    acting_user = user_list[0]
+                    acting_user: APIUser = user_list[0]
                     GroupAssignee.objects.assign(
                         group=group, assigned_to=acting_user, acting_user=acting_user
                     )
@@ -205,7 +227,7 @@ def resolved_in_pull_request(instance, created, **kwargs):
                     group=group,
                     type=ActivityType.SET_RESOLVED_IN_PULL_REQUEST.value,
                     ident=instance.id,
-                    user=acting_user,
+                    user_id=acting_user.id if acting_user else None,
                     data={"pull_request": instance.id},
                 )
                 record_group_history(
@@ -223,8 +245,29 @@ def resolved_in_pull_request(instance, created, **kwargs):
                 )
 
 
+def save_release_activity(instance: Release, created: bool, **kwargs):
+    if created:
+        if features.has("organizations:active-release-monitor-alpha", instance.organization):
+            ReleaseActivity.objects.create(
+                type=ReleaseActivityType.CREATED.value,
+                release=instance,
+                date_added=instance.date_added,
+            )
+
+
+pre_save.connect(
+    validate_release_empty_version,
+    sender=Release,
+    dispatch_uid="validate_release_empty_version",
+    weak=False,
+)
+
 post_save.connect(
     resolve_group_resolutions, sender=Release, dispatch_uid="resolve_group_resolutions", weak=False
+)
+
+post_save.connect(
+    save_release_activity, sender=Release, dispatch_uid="save_release_activity", weak=False
 )
 
 post_save.connect(resolved_in_commit, sender=Commit, dispatch_uid="resolved_in_commit", weak=False)

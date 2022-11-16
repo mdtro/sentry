@@ -5,9 +5,9 @@ web-server
 
 import logging
 import os.path
-from collections import OrderedDict, namedtuple
+from collections import namedtuple
 from datetime import timedelta
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple, cast
 
 import sentry_relay
 from django.conf import settings
@@ -29,7 +29,7 @@ def get_all_languages() -> List[str]:
     return results
 
 
-MODULE_ROOT = os.path.dirname(__import__("sentry").__file__)
+MODULE_ROOT = os.path.dirname(cast(str, __import__("sentry").__file__))
 DATA_ROOT = os.path.join(MODULE_ROOT, "data")
 
 BAD_RELEASE_CHARS = "\r\n\f\x0c\t/\\"
@@ -40,18 +40,18 @@ COMMIT_RANGE_DELIMITER = ".."
 # semver constants
 SEMVER_FAKE_PACKAGE = "__sentry_fake__"
 
-SORT_OPTIONS = OrderedDict(
-    (
-        ("priority", _("Priority")),
-        ("date", _("Last Seen")),
-        ("new", _("First Seen")),
-        ("freq", _("Frequency")),
-    )
-)
+SORT_OPTIONS = {
+    "priority": _("Priority"),
+    "date": _("Last Seen"),
+    "new": _("First Seen"),
+    "freq": _("Frequency"),
+}
 
-SEARCH_SORT_OPTIONS = OrderedDict(
-    (("score", _("Score")), ("date", _("Last Seen")), ("new", _("First Seen")))
-)
+SEARCH_SORT_OPTIONS = {
+    "score": _("Score"),
+    "date": _("Last Seen"),
+    "new": _("First Seen"),
+}
 
 # XXX: Deprecated: use GroupStatus instead
 STATUS_UNRESOLVED = 0
@@ -82,75 +82,76 @@ MAX_ROLLUP_POINTS = 10000
 # which we don't want to worry about conflicts on.
 RESERVED_ORGANIZATION_SLUGS = frozenset(
     (
-        "admin",
-        "manage",
-        "login",
-        "account",
-        "register",
-        "api",
-        "accept",
-        "organizations",
-        "teams",
-        "projects",
-        "help",
-        "docs",
-        "logout",
         "404",
         "500",
-        "_static",
-        "out",
-        "debug",
-        "remote",
-        "get-cli",
-        "blog",
-        "welcome",
-        "features",
-        "customers",
-        "integrations",
-        "signup",
-        "pricing",
-        "subscribe",
-        "enterprise",
-        "about",
-        "jobs",
-        "thanks",
-        "guide",
-        "privacy",
-        "security",
-        "terms",
-        "from",
-        "sponsorship",
-        "for",
-        "at",
-        "platforms",
-        "branding",
-        "vs",
-        "answers",
         "_admin",
-        "support",
+        "_experiment",
+        "_static",
+        "about",
+        "accept",
+        "account",
+        "admin",
+        "answers",
+        "api",
+        "at",
+        "avatar",
+        "blog",
+        "branding",
+        "careers",
+        "community",
         "contact",
-        "onboarding",
+        "customers",
+        "debug",
+        "demo",
+        "docs",
+        "enterprise",
+        "events",
         "ext",
         "extension",
         "extensions",
-        "plugins",
-        "themonitor",
-        "settings",
-        "legal",
-        "avatar",
-        "organization-avatar",
-        "project-avatar",
-        "team-avatar",
-        "careers",
-        "_experiment",
-        "sentry-apps",
-        "resources",
+        "features",
+        "for",
+        "from",
+        "get-cli",
+        "guide",
+        "help",
         "integration-platform",
-        "trust",
+        "integrations",
+        "jobs",
         "legal",
-        "community",
+        "legal",
+        "login",
+        "logout",
+        "manage",
+        "onboarding",
+        "organization-avatar",
+        "organizations",
+        "out",
+        "platforms",
+        "plugins",
+        "pricing",
+        "privacy",
+        "project-avatar",
+        "projects",
         "referrals",
-        "demo",
+        "register",
+        "remote",
+        "resources",
+        "security",
+        "sentry-apps",
+        "settings",
+        "signup",
+        "sponsorship",
+        "subscribe",
+        "support",
+        "team-avatar",
+        "teams",
+        "terms",
+        "thanks",
+        "themonitor",
+        "trust",
+        "vs",
+        "welcome",
     )
 )
 
@@ -221,6 +222,7 @@ _SENTRY_RULES = (
     "sentry.rules.actions.notify_event.NotifyEventAction",
     "sentry.rules.actions.notify_event_service.NotifyEventServiceAction",
     "sentry.rules.actions.sentry_apps.notify_event.NotifyEventSentryAppAction",
+    "sentry.rules.conditions.active_release.ActiveReleaseEventCondition",
     "sentry.rules.conditions.every_event.EveryEventCondition",
     "sentry.rules.conditions.first_seen_event.FirstSeenEventCondition",
     "sentry.rules.conditions.regression_event.RegressionEventCondition",
@@ -235,6 +237,7 @@ _SENTRY_RULES = (
     "sentry.rules.filters.issue_occurrences.IssueOccurrencesFilter",
     "sentry.rules.filters.assigned_to.AssignedToFilter",
     "sentry.rules.filters.latest_release.LatestReleaseFilter",
+    "sentry.rules.filters.issue_category.IssueCategoryFilter",
     # The following filters are duplicates of their respective conditions and are conditionally shown if the user has issue alert-filters
     "sentry.rules.filters.event_attribute.EventAttributeFilter",
     "sentry.rules.filters.tagged_event.TaggedEventFilter",
@@ -290,6 +293,7 @@ KNOWN_DIF_FORMATS: Dict[str, str] = {
     "application/x-bcsymbolmap": "bcsymbolmap",
     "application/x-debugid-map": "uuidmap",
     "application/x-il2cpp-json": "il2cpp",
+    "application/x-portable-pdb": "portablepdb",
 }
 
 NATIVE_UNKNOWN_STRING = "<unknown>"
@@ -470,6 +474,19 @@ class SentryAppStatus:
         else:
             return None
 
+    @classmethod
+    def as_int(cls, status: str) -> Optional[int]:
+        if status == cls.UNPUBLISHED_STR:
+            return cls.UNPUBLISHED
+        elif status == cls.PUBLISHED_STR:
+            return cls.PUBLISHED
+        elif status == cls.INTERNAL_STR:
+            return cls.INTERNAL
+        elif status == cls.PUBLISH_REQUEST_INPROGRESS_STR:
+            return cls.PUBLISH_REQUEST_INPROGRESS
+        else:
+            return None
+
 
 class SentryAppInstallationStatus:
     PENDING = 0
@@ -533,6 +550,16 @@ class ExportQueryType:
 StatsPeriod = namedtuple("StatsPeriod", ("segments", "interval"))
 
 LEGACY_RATE_LIMIT_OPTIONS = frozenset(("sentry:project-rate-limit", "sentry:account-rate-limit"))
+
+# A mapping of OrganizationOption keys to frontend features, and functions to apply the feature.
+# Enabling feature-flagging frontend components without an extra API call/endpoint to verify
+# the OrganizationOption.
+# If the function is None, the feature will be added regardless of the option value (if present)
+ORGANIZATION_OPTIONS_AS_FEATURES = {
+    "sentry:project-rate-limit": ("legacy-rate-limits", None),
+    "sentry:account-rate-limit": ("legacy-rate-limits", None),
+    "quotas:new-spike-protection": ("spike-projections", lambda opt: bool(opt.value)),
+}
 
 
 # We need to limit the range of valid timestamps of an event because that

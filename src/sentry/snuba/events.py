@@ -26,6 +26,16 @@ class Columns(Enum):
         discover_name="group_id",
         alias="issue.id",
     )
+    # This is needed to query transactions by group id
+    # in the Issue Details page. This will not be
+    # exposed to users through discover search.
+    GROUP_IDS = Column(
+        group_name=None,
+        event_name="group_ids",
+        transaction_name="group_ids",
+        discover_name="group_ids",
+        alias="performance.issue_ids",
+    )
     PROJECT_ID = Column(
         group_name="events.project_id",
         event_name="project_id",
@@ -223,6 +233,13 @@ class Columns(Enum):
         discover_name="tags[url]",
         alias="http.url",
     )
+    HTTP_STATUS_CODE = Column(
+        group_name="events.contexts[response.status_code]",
+        event_name="contexts[response.status_code]",
+        transaction_name="contexts[response.status_code]",
+        discover_name="contexts[response.status_code]",
+        alias="http.status_code",
+    )
     OS_BUILD = Column(
         group_name="events.contexts[os.build]",
         event_name="contexts[os.build]",
@@ -300,6 +317,34 @@ class Columns(Enum):
         discover_name="contexts[device.orientation]",
         alias="device.orientation",
     )
+    DEVICE_SCREEN_DENSITY = Column(
+        group_name="events.contexts[device.screen_density]",
+        event_name="contexts[device.screen_density]",
+        transaction_name="contexts[device.screen_density]",
+        discover_name="contexts[device.screen_density]",
+        alias="device.screen_density",
+    )
+    DEVICE_SCREEN_DPI = Column(
+        group_name="events.contexts[device.screen_dpi]",
+        event_name="contexts[device.screen_dpi]",
+        transaction_name="contexts[device.screen_dpi]",
+        discover_name="contexts[device.screen_dpi]",
+        alias="device.screen_dpi",
+    )
+    DEVICE_SCREEN_HEIGHT_PIXELS = Column(
+        group_name="events.contexts[device.screen_height_pixels]",
+        event_name="contexts[device.screen_height_pixels]",
+        transaction_name="contexts[device.screen_height_pixels]",
+        discover_name="contexts[device.screen_height_pixels]",
+        alias="device.screen_height_pixels",
+    )
+    DEVICE_SCREEN_WIDTH_PIXELS = Column(
+        group_name="events.contexts[device.screen_width_pixels]",
+        event_name="contexts[device.screen_width_pixels]",
+        transaction_name="contexts[device.screen_width_pixels]",
+        discover_name="contexts[device.screen_width_pixels]",
+        alias="device.screen_width_pixels",
+    )
     DEVICE_SIMULATOR = Column(
         group_name="events.contexts[device.simulator]",
         event_name="contexts[device.simulator]",
@@ -362,6 +407,13 @@ class Columns(Enum):
         transaction_name=None,
         discover_name="exception_stacks.mechanism_handled",
         alias="error.handled",
+    )
+    ERROR_RECEIVED = Column(
+        group_name=None,
+        event_name="received",
+        transaction_name=None,
+        discover_name="received",
+        alias="error.received",
     )
     STACK_ABS_PATH = Column(
         group_name="events.exception_frames.abs_path",
@@ -462,6 +514,13 @@ class Columns(Enum):
         discover_name="transaction_status",
         alias="transaction.status",
     )
+    TRANSACTION_SOURCE = Column(
+        group_name=None,
+        event_name=None,
+        transaction_name="transaction_source",
+        discover_name="transaction_source",
+        alias="transaction.source",
+    )
     MEASUREMENTS_KEYS = Column(
         group_name=None,
         event_name=None,
@@ -522,8 +581,8 @@ class Columns(Enum):
     SPAN_ID = Column(
         group_name="events.contexts[trace.span_id]",
         event_name="contexts[trace.span_id]",
-        transaction_name="contexts[trace.span_id]",
-        discover_name="contexts[trace.span_id]",
+        transaction_name="span_id",
+        discover_name="span_id",
         alias="trace.span",
     )
     PARENT_SPAN_ID = Column(
@@ -541,4 +600,19 @@ class Columns(Enum):
         transaction_name="contexts[reprocessing.original_issue_id]",
         discover_name="contexts[reprocessing.original_issue_id]",
         alias="reprocessing.original_issue_id",
+    )
+    TRACE_SAMPLE_RATE = Column(
+        group_name="events.contexts[trace.client_sample_rate]",
+        event_name="contexts[trace.client_sample_rate]",
+        transaction_name="contexts[trace.client_sample_rate]",
+        discover_name="contexts[trace.client_sample_rate]",
+        alias="trace.client_sample_rate",
+    )
+
+    APP_START_TYPE = Column(
+        group_name=None,
+        event_name=None,
+        transaction_name="app_start_type",
+        discover_name="app_start_type",
+        alias="app_start_type",
     )

@@ -4,12 +4,13 @@ from typing import Any, Mapping, MutableMapping, Sequence
 
 import requests as requests_
 from django.urls import reverse
+from rest_framework import serializers
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import analytics
 from sentry.api import ApiClient, client
-from sentry.api.base import Endpoint
+from sentry.api.base import Endpoint, pending_silo_endpoint
 from sentry.api.helpers.group_index import update_groups
 from sentry.auth.access import from_member
 from sentry.exceptions import UnableToAcceptMemberInvitationException
@@ -28,6 +29,7 @@ from sentry.models import (
     NotificationSetting,
     OrganizationMember,
 )
+from sentry.models.activity import ActivityIntegration
 from sentry.notifications.utils.actions import MessageAction
 from sentry.shared_integrations.exceptions import ApiError
 from sentry.types.integrations import ExternalProviders
@@ -122,6 +124,7 @@ def _is_message(data: Mapping[str, Any]) -> bool:
     return is_message
 
 
+@pending_silo_endpoint
 class SlackActionEndpoint(Endpoint):  # type: ignore
     authentication_classes = ()
     permission_classes = ()
@@ -162,6 +165,25 @@ class SlackActionEndpoint(Endpoint):  # type: ignore
 
         return self.respond_ephemeral(text)
 
+    def validation_error(
+        self,
+        slack_request: SlackActionRequest,
+        group: Group,
+        error: serializers.ValidationError,
+        action_type: str,
+    ) -> Response:
+        logger.info(
+            "slack.action.validation-error",
+            extra={
+                **slack_request.get_logging_data(group),
+                "response": str(error.detail),
+                "action_type": action_type,
+            },
+        )
+
+        text: str = list(*error.detail.values())[0]
+        return self.respond_ephemeral(text)
+
     def on_assign(
         self, request: Request, identity: Identity, group: Group, action: MessageAction
     ) -> None:
@@ -172,7 +194,15 @@ class SlackActionEndpoint(Endpoint):  # type: ignore
         if assignee == "none":
             assignee = None
 
-        update_group(group, identity, {"assignedTo": assignee}, request)
+        update_group(
+            group,
+            identity,
+            {
+                "assignedTo": assignee,
+                "integration": ActivityIntegration.SLACK.value,
+            },
+            request,
+        )
         analytics.record("integrations.slack.assign", actor_id=identity.user_id)
 
     def on_status(
@@ -278,6 +308,7 @@ class SlackActionEndpoint(Endpoint):  # type: ignore
             )
             return self.respond_ephemeral(LINK_IDENTITY_MESSAGE.format(associate_url=associate_url))
 
+        original_tags_from_request = slack_request.get_tags()
         # Handle status dialog submission
         if (
             slack_request.type == "dialog_submission"
@@ -295,7 +326,7 @@ class SlackActionEndpoint(Endpoint):  # type: ignore
                 return self.api_error(slack_request, group, identity, error, "status_dialog")
 
             attachment = SlackIssuesMessageBuilder(
-                group, identity=identity, actions=[action]
+                group, identity=identity, actions=[action], tags=original_tags_from_request
             ).build()
             body = self.construct_reply(
                 attachment, is_message=slack_request.callback_data["is_message"]
@@ -330,6 +361,8 @@ class SlackActionEndpoint(Endpoint):  # type: ignore
                     defer_attachment_update = True
             except client.ApiError as error:
                 return self.api_error(slack_request, group, identity, error, action.name)
+            except serializers.ValidationError as error:
+                return self.validation_error(slack_request, group, error, action.name)
 
         if defer_attachment_update:
             return self.respond()
@@ -338,7 +371,7 @@ class SlackActionEndpoint(Endpoint):  # type: ignore
         group = Group.objects.get(id=group.id)
 
         attachment = SlackIssuesMessageBuilder(
-            group, identity=identity, actions=action_list
+            group, identity=identity, actions=action_list, tags=original_tags_from_request
         ).build()
         body = self.construct_reply(attachment, is_message=_is_message(slack_request.data))
 
@@ -443,7 +476,7 @@ class SlackActionEndpoint(Endpoint):  # type: ignore
             return self.respond_with_text(NO_PERMISSION_MESSAGE)
 
         # validate the org options and check against allowed_roles
-        allowed_roles = member_of_approver.get_allowed_roles_to_invite()
+        allowed_roles = member_of_approver.get_allowed_org_roles_to_invite()
         try:
             member.validate_invitation(identity.user, allowed_roles)
         except UnableToAcceptMemberInvitationException as err:

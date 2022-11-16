@@ -12,11 +12,13 @@ from sentry import newsletter, options
 from sentry.auth.authenticators import RecoveryCodeInterface, TotpInterface
 from sentry.models import OrganizationMember, User
 from sentry.testutils import TestCase
+from sentry.testutils.silo import control_silo_test
 from sentry.utils import json
 from sentry.utils.client_state import get_client_state_key, get_redis_client
 
 
 # TODO(dcramer): need tests for SSO behavior and single org behavior
+# @control_silo_test(stable=True)
 class AuthLoginTest(TestCase):
     @fixture
     def path(self):
@@ -59,10 +61,31 @@ class AuthLoginTest(TestCase):
         self.client.get(self.path)
 
         resp = self.client.post(
-            self.path, {"username": self.user.username, "password": "admin", "op": "login"}
+            self.path,
+            {"username": self.user.username, "password": "admin", "op": "login"},
+            follow=True,
         )
-        assert resp.url == "/auth/login/"
-        assert resp.status_code == 302
+        assert resp.status_code == 200
+        assert resp.redirect_chain == [
+            (reverse("sentry-login"), 302),
+            ("/organizations/new/", 302),
+        ]
+
+    def test_login_valid_credentials_with_org(self):
+        org = self.create_organization(owner=self.user)
+        # load it once for test cookie
+        self.client.get(self.path)
+
+        resp = self.client.post(
+            self.path,
+            {"username": self.user.username, "password": "admin", "op": "login"},
+            follow=True,
+        )
+        assert resp.status_code == 200
+        assert resp.redirect_chain == [
+            (reverse("sentry-login"), 302),
+            (f"/organizations/{org.slug}/issues/", 302),
+        ]
 
     def test_login_valid_credentials_2fa_redirect(self):
         user = self.create_user("bar@example.com")
@@ -75,9 +98,18 @@ class AuthLoginTest(TestCase):
         resp = self.client.post(
             self.path,
             {"username": user.username, "password": "admin", "op": "login"},
+            follow=True,
         )
-        assert resp.url == "/auth/2fa/"
-        assert resp.status_code == 302
+        assert resp.status_code == 200
+        assert resp.redirect_chain == [(reverse("sentry-2fa-dialog"), 302)]
+
+        with mock.patch("sentry.auth.authenticators.TotpInterface.validate_otp", return_value=True):
+            resp = self.client.post(reverse("sentry-2fa-dialog"), {"otp": "something"}, follow=True)
+            assert resp.status_code == 200
+            assert resp.redirect_chain == [
+                (reverse("sentry-login"), 302),
+                ("/organizations/baz/issues/", 302),
+            ]
 
     def test_registration_disabled(self):
         options.set("auth.allow-registration", True)
@@ -144,15 +176,15 @@ class AuthLoginTest(TestCase):
         assert OrganizationMember.objects.filter(user=user).exists()
 
     @override_settings(SENTRY_SINGLE_ORGANIZATION=True)
-    @mock.patch("sentry.web.frontend.auth_login.ApiInviteHelper.from_cookie")
-    def test_registration_single_org_with_invite(self, from_cookie):
+    @mock.patch("sentry.web.frontend.auth_login.ApiInviteHelper.from_session")
+    def test_registration_single_org_with_invite(self, from_session):
         self.session["can_register"] = True
         self.save_session()
 
         self.client.get(self.path)
 
         invite_helper = mock.Mock(valid_request=True)
-        from_cookie.return_value = invite_helper
+        from_session.return_value = invite_helper
 
         resp = self.client.post(
             self.path,
@@ -197,15 +229,15 @@ class AuthLoginTest(TestCase):
         assert resp.context["register_form"].initial["username"] == "foo@example.com"
         self.assertTemplateUsed("sentry/login.html")
 
-    @mock.patch("sentry.web.frontend.auth_login.ApiInviteHelper.from_cookie")
-    def test_register_accepts_invite(self, from_cookie):
+    @mock.patch("sentry.web.frontend.auth_login.ApiInviteHelper.from_session")
+    def test_register_accepts_invite(self, from_session):
         self.session["can_register"] = True
         self.save_session()
 
         self.client.get(self.path)
 
         invite_helper = mock.Mock(valid_request=True)
-        from_cookie.return_value = invite_helper
+        from_session.return_value = invite_helper
 
         resp = self.client.post(
             self.path,
@@ -286,6 +318,7 @@ class AuthLoginTest(TestCase):
     settings.SENTRY_NEWSLETTER != "sentry.newsletter.dummy.DummyNewsletter",
     reason="Requires DummyNewsletter.",
 )
+@control_silo_test
 class AuthLoginNewsletterTest(TestCase):
     @fixture
     def path(self):
@@ -360,3 +393,143 @@ class AuthLoginNewsletterTest(TestCase):
         assert results[0].list_id == newsletter.get_default_list_id()
         assert results[0].subscribed
         assert not results[0].verified
+
+
+def provision_middleware():
+    # TODO: to be removed once CustomerDomainMiddleware is activated.
+    middleware = list(settings.MIDDLEWARE)
+    if "sentry.middleware.customer_domain.CustomerDomainMiddleware" not in middleware:
+        index = middleware.index("sentry.middleware.auth.AuthenticationMiddleware")
+        middleware.insert(index + 1, "sentry.middleware.customer_domain.CustomerDomainMiddleware")
+    return middleware
+
+
+@control_silo_test
+@override_settings(
+    SENTRY_USE_CUSTOMER_DOMAINS=True,
+)
+class AuthLoginCustomerDomainTest(TestCase):
+    @fixture
+    def path(self):
+        return reverse("sentry-login")
+
+    def test_login_valid_credentials(self):
+        # load it once for test cookie
+        self.client.get(self.path)
+
+        resp = self.client.post(
+            self.path,
+            {"username": self.user.username, "password": "admin", "op": "login"},
+            HTTP_HOST="albertos-apples.testserver",
+            follow=True,
+        )
+        assert resp.status_code == 200
+        assert resp.redirect_chain == [
+            (f"http://albertos-apples.testserver{reverse('sentry-login')}", 302),
+            ("http://testserver/organizations/new/", 302),
+        ]
+
+    def test_login_valid_credentials_with_org(self):
+        self.create_organization(name="albertos-apples", owner=self.user)
+        # load it once for test cookie
+        self.client.get(self.path)
+
+        resp = self.client.post(
+            self.path,
+            {"username": self.user.username, "password": "admin", "op": "login"},
+            HTTP_HOST="albertos-apples.testserver",
+            follow=True,
+        )
+        assert resp.status_code == 200
+        assert resp.redirect_chain == [
+            (f"http://albertos-apples.testserver{reverse('sentry-login')}", 302),
+            ("/organizations/albertos-apples/issues/", 302),
+        ]
+
+    def test_login_valid_credentials_invalid_customer_domain(self):
+        self.create_organization(name="albertos-apples", owner=self.user)
+
+        with override_settings(MIDDLEWARE=tuple(provision_middleware())):
+            # load it once for test cookie
+            self.client.get(self.path)
+            resp = self.client.post(
+                self.path,
+                {"username": self.user.username, "password": "admin", "op": "login"},
+                # This should preferably be HTTP_HOST.
+                # Using SERVER_NAME until https://code.djangoproject.com/ticket/32106 is fixed.
+                SERVER_NAME="invalid.testserver",
+                follow=True,
+            )
+
+            assert resp.status_code == 200
+            assert resp.redirect_chain == [
+                (f"http://invalid.testserver{reverse('sentry-login')}", 302),
+                ("http://albertos-apples.testserver/auth/login/", 302),
+                ("/organizations/albertos-apples/issues/", 302),
+            ]
+
+    def test_login_valid_credentials_non_staff(self):
+        org = self.create_organization(name="albertos-apples")
+        non_staff_user = self.create_user(is_staff=False)
+        self.create_member(organization=org, user=non_staff_user)
+        with override_settings(MIDDLEWARE=tuple(provision_middleware())):
+            # load it once for test cookie
+            self.client.get(self.path)
+
+            resp = self.client.post(
+                self.path,
+                {"username": non_staff_user.username, "password": "admin", "op": "login"},
+                # This should preferably be HTTP_HOST.
+                # Using SERVER_NAME until https://code.djangoproject.com/ticket/32106 is fixed.
+                SERVER_NAME="albertos-apples.testserver",
+                follow=True,
+            )
+            assert resp.status_code == 200
+            assert resp.redirect_chain == [
+                (f"http://albertos-apples.testserver{reverse('sentry-login')}", 302),
+                ("/organizations/albertos-apples/issues/", 302),
+            ]
+
+    def test_login_valid_credentials_not_a_member(self):
+        user = self.create_user()
+        self.create_organization(name="albertos-apples")
+        self.create_member(organization=self.organization, user=user)
+        with override_settings(MIDDLEWARE=tuple(provision_middleware())):
+            # load it once for test cookie
+            self.client.get(self.path)
+
+            resp = self.client.post(
+                self.path,
+                {"username": user.username, "password": "admin", "op": "login"},
+                HTTP_HOST="albertos-apples.testserver",
+                follow=True,
+            )
+
+            assert resp.status_code == 200
+            assert resp.redirect_chain == [
+                (f"http://albertos-apples.testserver{reverse('sentry-login')}", 302),
+                (
+                    f"http://albertos-apples.testserver{reverse('sentry-auth-organization', args=['albertos-apples'])}",
+                    302,
+                ),
+            ]
+
+    def test_login_valid_credentials_orgless(self):
+        user = self.create_user()
+        self.create_organization(name="albertos-apples")
+        with override_settings(MIDDLEWARE=tuple(provision_middleware())):
+            # load it once for test cookie
+            self.client.get(self.path)
+
+            resp = self.client.post(
+                self.path,
+                {"username": user.username, "password": "admin", "op": "login"},
+                HTTP_HOST="albertos-apples.testserver",
+                follow=True,
+            )
+
+            assert resp.status_code == 200
+            assert resp.redirect_chain == [
+                (f"http://albertos-apples.testserver{reverse('sentry-login')}", 302),
+                ("http://testserver/organizations/new/", 302),
+            ]

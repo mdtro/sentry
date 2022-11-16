@@ -6,7 +6,6 @@ from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import cpu_count
 
 import click
-from arroyo import configure_metrics
 
 from sentry.bgtasks.api import managed_bgtasks
 from sentry.ingest.types import ConsumerType
@@ -310,6 +309,11 @@ def cron(**options):
     help="Consumer group used to track event offsets that have been enqueued for post-processing.",
 )
 @click.option(
+    "--topic",
+    type=str,
+    help="Main topic with messages for post processing",
+)
+@click.option(
     "--commit-log-topic",
     default="snuba-commit-log",
     help="Topic that the Snuba writer is publishing its committed offsets to.",
@@ -332,16 +336,32 @@ def cron(**options):
     help="Time (in milliseconds) to wait before closing current batch and committing offsets.",
 )
 @click.option(
+    "--concurrency",
+    default=5,
+    type=int,
+    help="Thread pool size for post process worker.",
+)
+@click.option(
     "--initial-offset-reset",
     default="latest",
     type=click.Choice(["earliest", "latest"]),
     help="Position in the commit log topic to begin reading from when no prior offset has been recorded.",
 )
 @click.option(
+    "--no-strict-offset-reset",
+    is_flag=True,
+    help="Forces the kafka consumer auto offset reset.",
+)
+# TODO: Remove this option once we have fully cut over to the streaming consumer
+@click.option(
+    "--use-streaming-consumer",
+    is_flag=True,
+    help="Switches to the new streaming consumer implementation.",
+)
+@click.option(
     "--entity",
-    default="all",
-    type=click.Choice(["all", "errors", "transactions"]),
-    help="The type of entity to process (all, errors, transactions).",
+    type=click.Choice(["errors", "transactions"]),
+    help="The type of entity to process (errors, transactions).",
 )
 @log_options()
 @configuration
@@ -353,11 +373,15 @@ def post_process_forwarder(**options):
         eventstream.run_post_process_forwarder(
             entity=options["entity"],
             consumer_group=options["consumer_group"],
+            topic=options["topic"],
             commit_log_topic=options["commit_log_topic"],
             synchronize_commit_group=options["synchronize_commit_group"],
             commit_batch_size=options["commit_batch_size"],
             commit_batch_timeout_ms=options["commit_batch_timeout_ms"],
+            concurrency=options["concurrency"],
             initial_offset_reset=options["initial_offset_reset"],
+            strict_offset_reset=not options["no_strict_offset_reset"],
+            use_streaming_consumer=bool(options["use_streaming_consumer"]),
         )
     except ForwarderNotRequired:
         sys.stdout.write(
@@ -539,6 +563,30 @@ def ingest_consumer(consumer_types, all_consumer_types, **options):
         get_ingest_consumer(consumer_types=consumer_types, executor=executor, **options).run()
 
 
+@run.command("region-to-control-consumer")
+@log_options()
+@click.option(
+    "region_name",
+    "--region-name",
+    required=True,
+    help="Regional name to run the consumer for",
+)
+@batching_kafka_options("region-to-control-consumer")
+@configuration
+def region_to_control_consumer(region_name, **kafka_options):
+    """
+    Runs a "region -> consumer" task.
+
+    Processes specific even datums like UserIP that are produced in region silos but updated in control silos.
+    see region_to_control module
+    """
+    from sentry.region_to_control.consumer import get_region_to_control_consumer
+    from sentry.utils import metrics
+
+    with metrics.global_tags(region_name=region_name):
+        get_region_to_control_consumer(**kafka_options).run()
+
+
 @run.command("ingest-metrics-consumer-2")
 @log_options()
 @click.option("--topic", default="ingest-metrics", help="Topic to get metrics data from.")
@@ -552,17 +600,23 @@ def ingest_consumer(consumer_types, all_consumer_types, **options):
 @click.option("--input-block-size", type=int, default=DEFAULT_BLOCK_SIZE)
 @click.option("--output-block-size", type=int, default=DEFAULT_BLOCK_SIZE)
 @click.option("--factory-name", default="default")
+@click.option("--ingest-profile", required=True)
 @click.option("commit_max_batch_size", "--commit-max-batch-size", type=int, default=25000)
 @click.option("commit_max_batch_time", "--commit-max-batch-time-ms", type=int, default=10000)
+@click.option("--indexer-db", default="postgres")
 def metrics_streaming_consumer(**options):
-    from sentry.sentry_metrics.metrics_wrapper import MetricsWrapper
-    from sentry.sentry_metrics.multiprocess import get_streaming_metrics_consumer
-    from sentry.utils.metrics import backend
+    import sentry_sdk
 
-    metrics = MetricsWrapper(backend, "sentry_metrics.indexer")
-    configure_metrics(metrics)
+    from sentry.sentry_metrics.configuration import IndexerStorage, UseCaseKey, get_ingest_config
+    from sentry.sentry_metrics.consumers.indexer.multiprocess import get_streaming_metrics_consumer
+    from sentry.utils.metrics import global_tags
 
-    streamer = get_streaming_metrics_consumer(**options)
+    use_case = UseCaseKey(options["ingest_profile"])
+    db_backend = IndexerStorage(options["indexer_db"])
+    sentry_sdk.set_tag("sentry_metrics.use_case_key", use_case.value)
+    ingest_config = get_ingest_config(use_case, db_backend)
+
+    streamer = get_streaming_metrics_consumer(indexer_profile=ingest_config, **options)
 
     def handler(signum, frame):
         streamer.signal_shutdown()
@@ -570,7 +624,61 @@ def metrics_streaming_consumer(**options):
     signal.signal(signal.SIGINT, handler)
     signal.signal(signal.SIGTERM, handler)
 
+    with global_tags(_all_threads=True, pipeline=ingest_config.internal_metrics_tag):
+        streamer.run()
+
+
+@run.command("ingest-metrics-parallel-consumer")
+@log_options()
+@batching_kafka_options("ingest-metrics-consumer")
+@configuration
+@click.option(
+    "--processes",
+    default=1,
+    type=int,
+)
+@click.option("--input-block-size", type=int, default=DEFAULT_BLOCK_SIZE)
+@click.option("--output-block-size", type=int, default=DEFAULT_BLOCK_SIZE)
+@click.option("--ingest-profile", required=True)
+@click.option("--indexer-db", default="postgres")
+@click.option("max_msg_batch_size", "--max-msg-batch-size", type=int, default=50)
+@click.option("max_msg_batch_time", "--max-msg-batch-time-ms", type=int, default=10000)
+@click.option("max_parallel_batch_size", "--max-parallel-batch-size", type=int, default=50)
+@click.option("max_parallel_batch_time", "--max-parallel-batch-time-ms", type=int, default=10000)
+def metrics_parallel_consumer(**options):
+    from sentry.sentry_metrics.configuration import (
+        IndexerStorage,
+        UseCaseKey,
+        get_ingest_config,
+        initialize_global_consumer_state,
+    )
+    from sentry.sentry_metrics.consumers.indexer.parallel import get_parallel_metrics_consumer
+
+    use_case = UseCaseKey(options["ingest_profile"])
+    db_backend = IndexerStorage(options["indexer_db"])
+    ingest_config = get_ingest_config(use_case, db_backend)
+
+    streamer = get_parallel_metrics_consumer(indexer_profile=ingest_config, **options)
+
+    def handler(signum, frame):
+        streamer.signal_shutdown()
+
+    signal.signal(signal.SIGINT, handler)
+    signal.signal(signal.SIGTERM, handler)
+
+    initialize_global_consumer_state(ingest_config)
     streamer.run()
+
+
+@run.command("billing-metrics-consumer")
+@log_options()
+@batching_kafka_options("billing-metrics-consumer")
+@configuration
+def metrics_billing_consumer(**options):
+    from sentry.ingest.billing_metrics_consumer import get_metrics_billing_consumer
+
+    consumer = get_metrics_billing_consumer(**options)
+    consumer.run()
 
 
 @run.command("ingest-profiles")
@@ -584,6 +692,19 @@ def profiles_consumer(**options):
     get_profiles_consumer(**options).run()
 
 
+@run.command("ingest-replay-recordings")
+@log_options()
+@configuration
+@batching_kafka_options("ingest-replay-recordings")
+@click.option(
+    "--topic", default="ingest-replay-recordings", help="Topic to get replay recording data from"
+)
+def replays_recordings_consumer(**options):
+    from sentry.replays.consumers import get_replays_recordings_consumer
+
+    get_replays_recordings_consumer(**options).run()
+
+
 @run.command("indexer-last-seen-updater")
 @log_options()
 @configuration
@@ -591,10 +712,18 @@ def profiles_consumer(**options):
 @click.option("commit_max_batch_size", "--commit-max-batch-size", type=int, default=25000)
 @click.option("commit_max_batch_time", "--commit-max-batch-time-ms", type=int, default=10000)
 @click.option("--topic", default="snuba-metrics", help="Topic to read indexer output from.")
+@click.option("--ingest-profile", required=True)
+@click.option("--indexer-db", default="postgres")
 def last_seen_updater(**options):
-    from sentry.sentry_metrics.last_seen_updater import get_last_seen_updater
+    from sentry.sentry_metrics.configuration import IndexerStorage, UseCaseKey, get_ingest_config
+    from sentry.sentry_metrics.consumers.last_seen_updater import get_last_seen_updater
+    from sentry.utils.metrics import global_tags
 
-    consumer = get_last_seen_updater(**options)
+    ingest_config = get_ingest_config(
+        UseCaseKey(options["ingest_profile"]), IndexerStorage(options["indexer_db"])
+    )
+
+    consumer = get_last_seen_updater(ingest_config=ingest_config, **options)
 
     def handler(signum, frame):
         consumer.signal_shutdown()
@@ -602,4 +731,5 @@ def last_seen_updater(**options):
     signal.signal(signal.SIGINT, handler)
     signal.signal(signal.SIGTERM, handler)
 
-    consumer.run()
+    with global_tags(_all_threads=True, pipeline=ingest_config.internal_metrics_tag):
+        consumer.run()

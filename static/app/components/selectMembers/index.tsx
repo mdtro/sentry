@@ -3,7 +3,7 @@ import styled from '@emotion/styled';
 import debounce from 'lodash/debounce';
 
 import {Client} from 'sentry/api';
-import SelectControl from 'sentry/components/forms/selectControl';
+import SelectControl from 'sentry/components/forms/controls/selectControl';
 import IdBadge from 'sentry/components/idBadge';
 import Tooltip from 'sentry/components/tooltip';
 import {t} from 'sentry/locale';
@@ -187,7 +187,6 @@ class SelectMembers extends Component<Props, State> {
           option?.data?.searchKey?.indexOf(filterText) > -1
         }
         loadOptions={this.handleLoadOptions}
-        isOptionDisabled={option => option.disabled}
         defaultOptions
         async
         isDisabled={this.props.disabled}

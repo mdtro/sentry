@@ -4,7 +4,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import analytics
-from sentry.api.base import EnvironmentMixin
+from sentry.api.base import EnvironmentMixin, region_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint, ProjectReleasePermission
 from sentry.api.paginator import OffsetPaginator
 from sentry.api.serializers import serialize
@@ -17,6 +17,7 @@ from sentry.types.activity import ActivityType
 from sentry.utils.sdk import bind_organization_context, configure_scope
 
 
+@region_silo_endpoint
 class ProjectReleasesEndpoint(ProjectEndpoint, EnvironmentMixin):
     permission_classes = (ProjectReleasePermission,)
     rate_limits = RateLimitConfig(
@@ -130,6 +131,7 @@ class ProjectReleasesEndpoint(ProjectEndpoint, EnvironmentMixin):
                                 owner=result.get("owner"),
                                 date_released=result.get("dateReleased"),
                                 status=new_status or ReleaseStatus.OPEN,
+                                user_agent=request.META.get("HTTP_USER_AGENT", ""),
                             ),
                             True,
                         )
@@ -180,7 +182,7 @@ class ProjectReleasesEndpoint(ProjectEndpoint, EnvironmentMixin):
                     user_id=request.user.id if request.user and request.user.id else None,
                     organization_id=project.organization_id,
                     project_ids=[project.id],
-                    user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                    user_agent=request.META.get("HTTP_USER_AGENT", "")[:256],
                     created_status=status,
                 )
                 scope.set_tag("success_status", status)

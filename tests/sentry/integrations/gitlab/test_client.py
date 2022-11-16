@@ -4,10 +4,11 @@ from unittest import mock
 import pytest
 import responses
 
-from fixtures.gitlab import GitLabTestCase
+from fixtures.gitlab import GET_COMMIT_RESPONSE, GitLabTestCase
 from sentry.auth.exceptions import IdentityNotValid
 from sentry.models import Identity
 from sentry.shared_integrations.exceptions import ApiError
+from sentry.testutils.silo import control_silo_test
 from sentry.utils import json
 
 GITLAB_CODEOWNERS = {
@@ -17,12 +18,14 @@ GITLAB_CODEOWNERS = {
 }
 
 
+@control_silo_test
 class GitlabRefreshAuthTest(GitLabTestCase):
     get_user_should_succeed = True
 
     def setUp(self):
         super().setUp()
         self.client = self.installation.get_client()
+        self.client.base_url = "https://example.gitlab.com/"
         self.request_data = {"id": "user_id"}
         self.request_url = "https://example.gitlab.com/api/v4/user"
         self.refresh_url = "https://example.gitlab.com/oauth/token"
@@ -197,3 +200,15 @@ class GitlabRefreshAuthTest(GitLabTestCase):
         )
 
         assert result == GITLAB_CODEOWNERS
+
+    @responses.activate
+    def test_get_commit(self):
+        commit = "a" * 40
+        responses.add(
+            method=responses.GET,
+            url=f"https://example.gitlab.com/api/v4/projects/{self.gitlab_id}/repository/commits/{commit}",
+            json=json.loads(GET_COMMIT_RESPONSE),
+        )
+
+        resp = self.client.get_commit(self.gitlab_id, commit)
+        assert resp == json.loads(GET_COMMIT_RESPONSE)

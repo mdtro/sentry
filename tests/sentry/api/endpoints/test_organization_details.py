@@ -7,7 +7,7 @@ from django.utils import timezone
 from pytz import UTC
 from rest_framework import status
 
-from sentry import audit_log
+from sentry import audit_log, options
 from sentry.api.endpoints.organization_details import ERR_NO_2FA, ERR_SSO_ENABLED
 from sentry.auth.authenticators import TotpInterface
 from sentry.constants import RESERVED_ORGANIZATION_SLUGS
@@ -25,6 +25,7 @@ from sentry.models import (
 )
 from sentry.signals import project_created
 from sentry.testutils import APITestCase, TwoFactorAPITestCase, pytest
+from sentry.testutils.silo import region_silo_test
 from sentry.utils import json
 
 # some relay keys
@@ -53,16 +54,55 @@ class OrganizationDetailsTestBase(APITestCase):
         self.login_as(self.user)
 
 
+@region_silo_test
 class OrganizationDetailsTest(OrganizationDetailsTestBase):
     def test_simple(self):
         response = self.get_success_response(self.organization.slug)
 
+        assert response.data["slug"] == self.organization.slug
+        assert response.data["links"] == {
+            "organizationUrl": f"http://{self.organization.slug}.testserver",
+            "regionUrl": "http://us.testserver",
+        }
         assert response.data["onboardingTasks"] == []
         assert response.data["id"] == str(self.organization.id)
         assert response.data["role"] == "owner"
         assert response.data["orgRole"] == "owner"
         assert len(response.data["teams"]) == 0
         assert len(response.data["projects"]) == 0
+        assert "customer-domains" not in response.data["features"]
+
+    def test_simple_customer_domain(self):
+        HTTP_HOST = f"{self.organization.slug}.testserver"
+        response = self.get_success_response(
+            self.organization.slug, extra_headers={"HTTP_HOST": HTTP_HOST}
+        )
+
+        assert response.data["slug"] == self.organization.slug
+        assert response.data["links"] == {
+            "organizationUrl": f"http://{self.organization.slug}.testserver",
+            "regionUrl": "http://us.testserver",
+        }
+        assert response.data["onboardingTasks"] == []
+        assert response.data["id"] == str(self.organization.id)
+        assert response.data["role"] == "owner"
+        assert response.data["orgRole"] == "owner"
+        assert len(response.data["teams"]) == 0
+        assert len(response.data["projects"]) == 0
+        assert "customer-domains" in response.data["features"]
+
+        with self.feature({"organizations:customer-domains": False}):
+            HTTP_HOST = f"{self.organization.slug}.testserver"
+            response = self.get_success_response(
+                self.organization.slug, extra_headers={"HTTP_HOST": HTTP_HOST}
+            )
+            assert "customer-domains" in response.data["features"]
+
+    def test_org_mismatch_customer_domain(self):
+        HTTP_HOST = f"{self.organization.slug}-apples.testserver"
+        self.get_error_response(
+            self.organization.slug, status_code=404, extra_headers={"HTTP_HOST": HTTP_HOST}
+        )
 
     def test_with_projects(self):
         # Create non-member team to test response shape
@@ -91,13 +131,14 @@ class OrganizationDetailsTest(OrganizationDetailsTestBase):
         )
 
         # TODO(dcramer): We need to pare this down. Lots of duplicate queries for membership data.
-        expected_queries = 35
+        expected_queries = 36
 
-        # TODO(mgaeta): Extra query while we're "dual reading" from UserOptions and NotificationSettings.
+        # make sure options are not cached the first time to get predictable number of database queries
+        options.delete("system.rate-limit")
+        options.delete("store.symbolicate-event-lpq-always")
+        options.delete("store.symbolicate-event-lpq-never")
+
         expected_queries += 1
-
-        # Symbolication Low Priority Queue stats reads two killswitches
-        expected_queries += 8
 
         with self.assertNumQueries(expected_queries, using="default"):
             response = self.get_success_response(self.organization.slug)
@@ -187,7 +228,17 @@ class OrganizationDetailsTest(OrganizationDetailsTestBase):
             created = parse_date(response_data[i]["created"])
             assert start_time < created < end_time
 
+    def test_has_auth_provider(self):
+        response = self.get_success_response(self.organization.slug)
+        assert response.data["hasAuthProvider"] is False
 
+        AuthProvider.objects.create(organization=self.organization, provider="dummy")
+
+        response = self.get_success_response(self.organization.slug)
+        assert response.data["hasAuthProvider"] is True
+
+
+@region_silo_test
 class OrganizationUpdateTest(OrganizationDetailsTestBase):
     method = "put"
 
@@ -210,10 +261,20 @@ class OrganizationUpdateTest(OrganizationDetailsTestBase):
         illegal_slug = list(RESERVED_ORGANIZATION_SLUGS)[0]
         self.get_error_response(self.organization.slug, slug=illegal_slug, status_code=400)
 
-    def test_invalid_slug(self):
+    def test_valid_slugs(self):
+        valid_slugs = ["santry", "downtown-canada", "1234", "SaNtRy"]
+        for slug in valid_slugs:
+            self.organization.refresh_from_db()
+            self.get_success_response(self.organization.slug, slug=slug)
+
+    def test_invalid_slugs(self):
         self.get_error_response(self.organization.slug, slug=" i have whitespace ", status_code=400)
         self.get_error_response(self.organization.slug, slug="foo-bar ", status_code=400)
         self.get_error_response(self.organization.slug, slug="bird-company!", status_code=400)
+        self.get_error_response(self.organization.slug, slug="downtown_canada", status_code=400)
+        self.get_error_response(self.organization.slug, slug="canada-", status_code=400)
+        self.get_error_response(self.organization.slug, slug="-canada", status_code=400)
+        self.get_error_response(self.organization.slug, slug="----", status_code=400)
 
     def test_upload_avatar(self):
         data = {"avatarType": "upload", "avatar": b64encode(self.load_fixture("avatar.jpg"))}
@@ -632,6 +693,7 @@ class OrganizationUpdateTest(OrganizationDetailsTestBase):
         assert b"storeCrashReports" in resp.content
 
 
+@region_silo_test
 class OrganizationDeleteTest(OrganizationDetailsTestBase):
     method = "delete"
 
@@ -694,6 +756,7 @@ class OrganizationDeleteTest(OrganizationDetailsTestBase):
         ).exists()
 
 
+@region_silo_test
 class OrganizationSettings2FATest(TwoFactorAPITestCase):
     endpoint = "sentry-api-0-organization-details"
 

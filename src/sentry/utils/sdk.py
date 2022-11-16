@@ -1,5 +1,6 @@
 import copy
 import inspect
+import random
 
 import sentry_sdk
 from django.conf import settings
@@ -50,7 +51,6 @@ SAMPLED_URL_NAMES = {
     "sentry-api-0-user-notification-settings": settings.SAMPLED_DEFAULT_RATE,
     "sentry-api-0-team-notification-settings": settings.SAMPLED_DEFAULT_RATE,
     # events
-    "sentry-api-0-organization-eventsv2": 0.1,
     "sentry-api-0-organization-events": 1,
     # releases
     "sentry-api-0-organization-releases": settings.SAMPLED_DEFAULT_RATE,
@@ -86,6 +86,9 @@ SAMPLED_URL_NAMES = {
 if settings.ADDITIONAL_SAMPLED_URLS:
     SAMPLED_URL_NAMES.update(settings.ADDITIONAL_SAMPLED_URLS)
 
+# Tasks not included here are not sampled
+# If a parent task schedules other tasks you should add it in here or the children
+# tasks will not be sampled
 SAMPLED_TASKS = {
     "sentry.tasks.send_ping": settings.SAMPLED_DEFAULT_RATE,
     "sentry.tasks.store.symbolicate_event": settings.SENTRY_SYMBOLICATE_EVENT_APM_SAMPLING,
@@ -96,16 +99,24 @@ SAMPLED_TASKS = {
     "sentry.tasks.app_store_connect.dsym_download": settings.SENTRY_APPCONNECT_APM_SAMPLING,
     "sentry.tasks.app_store_connect.refresh_all_builds": settings.SENTRY_APPCONNECT_APM_SAMPLING,
     "sentry.tasks.process_suspect_commits": settings.SENTRY_SUSPECT_COMMITS_APM_SAMPLING,
+    "sentry.tasks.process_commit_context": settings.SENTRY_SUSPECT_COMMITS_APM_SAMPLING,
     "sentry.tasks.post_process.post_process_group": settings.SENTRY_POST_PROCESS_GROUP_APM_SAMPLING,
     "sentry.tasks.reprocessing2.handle_remaining_events": settings.SENTRY_REPROCESSING_APM_SAMPLING,
     "sentry.tasks.reprocessing2.reprocess_group": settings.SENTRY_REPROCESSING_APM_SAMPLING,
     "sentry.tasks.reprocessing2.finish_reprocessing": settings.SENTRY_REPROCESSING_APM_SAMPLING,
-    # `update_config_cache` is deprecated, leave this sampling until it's removed
-    "sentry.tasks.relay.update_config_cache": settings.SENTRY_RELAY_TASK_APM_SAMPLING,
     "sentry.tasks.relay.build_project_config": settings.SENTRY_RELAY_TASK_APM_SAMPLING,
     "sentry.tasks.relay.invalidate_project_config": settings.SENTRY_RELAY_TASK_APM_SAMPLING,
+    # This is the parent task of the next two tasks.
+    "sentry.tasks.reports.prepare_reports": 1.0,
     "sentry.tasks.reports.prepare_organization_report": 0.1,
     "sentry.tasks.reports.deliver_organization_user_report": 0.01,
+    "sentry.tasks.process_buffer.process_incr": 0.01,
+    "sentry.replays.tasks.delete_recording_segments": settings.SAMPLED_DEFAULT_RATE,
+    "sentry.tasks.weekly_reports.schedule_organizations": 1.0,
+    "sentry.tasks.weekly_reports.prepare_organization_report": 0.1,
+    "sentry.profiles.task.process_profile": 0.01,
+    "sentry.tasks.derive_code_mappings.process_organizations": settings.SAMPLED_DEFAULT_RATE,
+    "sentry.tasks.derive_code_mappings.derive_code_mappings": settings.SAMPLED_DEFAULT_RATE,
 }
 
 if settings.ADDITIONAL_SAMPLED_TASKS:
@@ -113,6 +124,7 @@ if settings.ADDITIONAL_SAMPLED_TASKS:
 
 
 UNSAFE_TAG = "_unsafe"
+EXPERIMENT_TAG = "_experimental_event"
 
 
 def is_current_event_safe():
@@ -139,6 +151,16 @@ def is_current_event_safe():
     return True
 
 
+def is_current_event_experimental():
+    """
+    Checks if the event was explicitly marked as experimental.
+    """
+    with configure_scope() as scope:
+        if scope._tags.get(EXPERIMENT_TAG):
+            return True
+    return False
+
+
 def mark_scope_as_unsafe():
     """
     Set the unsafe tag on the SDK scope for outgoing crashes and transactions.
@@ -148,6 +170,16 @@ def mark_scope_as_unsafe():
     """
     with configure_scope() as scope:
         scope.set_tag(UNSAFE_TAG, True)
+
+
+def mark_scope_as_experimental():
+    """
+    Set the experimental tag on the SDK scope for outgoing crashes and transactions.
+
+    Marking the scope will cause these crashes and transaction to be sent to a separate experimental dsn.
+    """
+    with configure_scope() as scope:
+        scope.set_tag(EXPERIMENT_TAG, True)
 
 
 def set_current_event_project(project_id):
@@ -165,7 +197,7 @@ def set_current_event_project(project_id):
 
 
 def get_project_key():
-    from sentry.models import ProjectKey
+    from sentry.models.projectkey import ProjectKey
 
     if not settings.SENTRY_PROJECT:
         return None
@@ -251,7 +283,9 @@ def configure_sdk():
     sdk_options = dict(settings.SENTRY_SDK_CONFIG)
 
     relay_dsn = sdk_options.pop("relay_dsn", None)
+    experimental_dsn = sdk_options.pop("experimental_dsn", None)
     internal_project_key = get_project_key()
+    # Modify SENTRY_SDK_CONFIG in your deployment scripts to specify your desired DSN
     upstream_dsn = sdk_options.pop("dsn", None)
     sdk_options["traces_sampler"] = traces_sampler
     sdk_options["release"] = (
@@ -275,6 +309,20 @@ def configure_sdk():
         relay_transport = patch_transport_for_instrumentation(transport, "relay")
     else:
         relay_transport = None
+
+    if experimental_dsn:
+        transport = make_transport(get_options(dsn=experimental_dsn, **sdk_options))
+        experimental_transport = patch_transport_for_instrumentation(transport, "experimental")
+    else:
+        experimental_transport = None
+
+    if settings.SENTRY_PROFILING_ENABLED:
+        sdk_options.setdefault("_experiments", {}).update(
+            {
+                "profiles_sample_rate": settings.SENTRY_PROFILES_SAMPLE_RATE,
+                "profiler_mode": settings.SENTRY_PROFILER_MODE,
+            }
+        )
 
     class MultiplexingTransport(sentry_sdk.transport.Transport):
         def capture_envelope(self, envelope):
@@ -301,6 +349,14 @@ def configure_sdk():
             self._capture_anything("capture_event", event)
 
         def _capture_anything(self, method_name, *args, **kwargs):
+            # Experimental events will be sent to the experimental transport.
+            if experimental_transport:
+                rate = options.get("store.use-experimental-dsn-sample-rate")
+                if is_current_event_experimental():
+                    if rate and random.random() < rate:
+                        getattr(experimental_transport, method_name)(*args, **kwargs)
+                    # Experimental events should not be sent to other transports even if they are not sampled.
+                    return
 
             # Upstream should get the event first because it is most isolated from
             # the this sentry installation.
@@ -333,6 +389,9 @@ def configure_sdk():
                     )
 
     sentry_sdk.init(
+        # set back the upstream_dsn popped above since we need a default dsn on the client
+        # for dynamic sampling context public_key population
+        dsn=upstream_dsn,
         transport=MultiplexingTransport(),
         integrations=[
             DjangoAtomicIntegration(),
@@ -345,6 +404,9 @@ def configure_sdk():
         ],
         **sdk_options,
     )
+
+    if settings.SENTRY_PROFILING_ENABLED:
+        sentry_sdk.set_tag("sentry.profiler", settings.SENTRY_PROFILER_MODE)
 
 
 class RavenShim:
@@ -391,3 +453,12 @@ def bind_organization_context(organization):
                     "internal-error.organization-context",
                     extra={"organization_id": organization.id},
                 )
+
+
+def set_measurement(measurement_name, value, unit=None):
+    try:
+        transaction = sentry_sdk.Hub.current.scope.transaction
+        if transaction is not None:
+            transaction.set_measurement(measurement_name, value, unit)
+    except Exception:
+        pass

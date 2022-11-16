@@ -1,7 +1,9 @@
 from sentry.api.serializers import OrganizationMemberWithProjectsSerializer, serialize
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class OrganizationMemberListTest(APITestCase):
     endpoint = "sentry-api-0-organization-users"
 
@@ -23,7 +25,8 @@ class OrganizationMemberListTest(APITestCase):
         self.login_as(user=self.user_2)
 
     def test_simple(self):
-        projects_ids = [self.project_1.id, self.project_2.id]
+        projects = [self.project_1, self.project_2]
+        projects_ids = [p.id for p in projects]
         response = self.get_success_response(self.org.slug, project=projects_ids)
         expected = serialize(
             list(
@@ -32,15 +35,16 @@ class OrganizationMemberListTest(APITestCase):
                 )
             ),
             self.user_2,
-            OrganizationMemberWithProjectsSerializer(project_ids=projects_ids),
+            OrganizationMemberWithProjectsSerializer(projects=projects),
         )
         assert response.data == expected
 
-        projects_ids = [self.project_2.id]
+        projects = [self.project_2]
+        projects_ids = [p.id for p in projects]
         response = self.get_success_response(self.org.slug, project=projects_ids)
         expected = serialize(
             list(self.org.member_set.filter(user__in=[self.user_2]).order_by("user__email")),
             self.user_2,
-            OrganizationMemberWithProjectsSerializer(project_ids=projects_ids),
+            OrganizationMemberWithProjectsSerializer(projects=projects),
         )
         assert response.data == expected

@@ -1,5 +1,9 @@
+from __future__ import annotations
+
+import shutil
 import threading
 import types
+from typing import NoReturn
 from urllib.parse import urlparse
 
 import click
@@ -14,12 +18,24 @@ _DEFAULT_DAEMONS = {
         "sentry",
         "run",
         "post-process-forwarder",
-        "--entity=all",
+        "--entity=errors",
         "--loglevel=debug",
         "--commit-batch-size=100",
         "--commit-batch-timeout-ms=1000",
     ],
+    "post-process-forwarder-transactions": [
+        "sentry",
+        "run",
+        "post-process-forwarder",
+        "--entity=transactions",
+        "--loglevel=debug",
+        "--commit-batch-size=100",
+        "--commit-batch-timeout-ms=1000",
+        "--commit-log-topic=snuba-transactions-commit-log",
+        "--synchronize-commit-group=transactions_group",
+    ],
     "ingest": ["sentry", "run", "ingest-consumer", "--all-consumer-types"],
+    "region_to_control": ["sentry", "run", "region-to-control-consumer", "--region-name", "_local"],
     "server": ["sentry", "run", "web"],
     "storybook": ["yarn", "storybook"],
     "subscription-consumer": [
@@ -31,12 +47,26 @@ _DEFAULT_DAEMONS = {
         "--force-offset-reset",
         "latest",
     ],
-    "metrics": ["sentry", "run", "ingest-metrics-consumer-2"],
+    "metrics-rh": [
+        "sentry",
+        "run",
+        "ingest-metrics-consumer-2",
+        "--ingest-profile",
+        "release-health",
+    ],
+    "metrics-perf": [
+        "sentry",
+        "run",
+        "ingest-metrics-consumer-2",
+        "--ingest-profile",
+        "performance",
+    ],
+    "metrics-billing": ["sentry", "run", "billing-metrics-consumer"],
     "profiles": ["sentry", "run", "ingest-profiles"],
 }
 
 
-def add_daemon(name, command):
+def add_daemon(name: str, command: list[str]) -> None:
     """
     Used by getsentry to add additional workers to the devserver setup.
     """
@@ -45,7 +75,7 @@ def add_daemon(name, command):
     _DEFAULT_DAEMONS[name] = command
 
 
-def _get_daemon(name, *args, **kwargs):
+def _get_daemon(name: str, *args: str, **kwargs: str) -> tuple[str, list[str]]:
     display_name = name
     if "suffix" in kwargs:
         display_name = "{}-{}".format(name, kwargs["suffix"])
@@ -86,28 +116,27 @@ def _get_daemon(name, *args, **kwargs):
 @click.argument(
     "bind", default=None, metavar="ADDRESS", envvar="SENTRY_DEVSERVER_BIND", required=False
 )
-@log_options()
-@configuration
+@log_options()  # type: ignore[misc]  # needs this decorator to be typed
+@configuration  # type: ignore[misc]  # needs this decorator to be typed
 def devserver(
-    reload,
-    watchers,
-    workers,
-    ingest,
-    experimental_spa,
-    styleguide,
-    prefix,
-    pretty,
-    environment,
-    debug_server,
-    bind,
-):
+    reload: bool,
+    watchers: bool,
+    workers: bool,
+    ingest: bool,
+    experimental_spa: bool,
+    styleguide: bool,
+    prefix: bool,
+    pretty: bool,
+    environment: str,
+    debug_server: bool,
+    bind: str | None,
+) -> NoReturn:
     "Starts a lightweight web server for development."
-
     if ingest:
         # Ingest requires kakfa+zookeeper to be running.
         # They're too heavyweight to startup on-demand with devserver.
-        docker = get_docker_client()
-        containers = {c.name for c in docker.containers.list(filters={"status": "running"})}
+        with get_docker_client() as docker:
+            containers = {c.name for c in docker.containers.list(filters={"status": "running"})}
         if "sentry_zookeeper" not in containers or "sentry_kafka" not in containers:
             raise SystemExit(
                 """
@@ -121,11 +150,10 @@ and run `sentry devservices up kafka zookeeper`.
         bind = "127.0.0.1:8000"
 
     if ":" in bind:
-        host, port = bind.split(":", 1)
-        port = int(port)
+        host, port_s = bind.split(":", 1)
+        port = int(port_s)
     else:
-        host = bind
-        port = None
+        raise SystemExit(f"expected <host>:<port>, got {bind}")
 
     import os
 
@@ -143,26 +171,19 @@ and run `sentry devservices up kafka zookeeper`.
     parsed_url = urlparse(url_prefix)
     # Make sure we're trying to use a port that we can actually bind to
     needs_https = parsed_url.scheme == "https" and (parsed_url.port or 443) > 1024
-    has_https = False
+    has_https = shutil.which("https") is not None
 
-    if needs_https:
-        from subprocess import check_output
+    if needs_https and not has_https:
+        from sentry.runner.initializer import show_big_error
 
-        try:
-            check_output(["which", "https"])
-            has_https = True
-        except Exception:
-            has_https = False
-            from sentry.runner.initializer import show_big_error
+        show_big_error(
+            [
+                "missing `https` on your `$PATH`, but https is needed",
+                "`$ brew install mattrobenolt/stuff/https`",
+            ]
+        )
 
-            show_big_error(
-                [
-                    "missing `https` on your `$PATH`, but https is needed",
-                    "`$ brew install mattrobenolt/stuff/https`",
-                ]
-            )
-
-    uwsgi_overrides = {
+    uwsgi_overrides: dict[str, int | bool | str | None] = {
         "http-keepalive": True,
         # Make sure we reload really quickly for local dev in case it
         # doesn't want to shut down nicely on it's own, NO MERCY
@@ -226,9 +247,6 @@ and run `sentry devservices up kafka zookeeper`.
             }
         )
 
-    if ingest:
-        settings.SENTRY_USE_RELAY = True
-
     os.environ["SENTRY_USE_RELAY"] = "1" if settings.SENTRY_USE_RELAY else ""
 
     if workers:
@@ -243,6 +261,7 @@ and run `sentry devservices up kafka zookeeper`.
 
         if eventstream.requires_post_process_forwarder():
             daemons += [_get_daemon("post-process-forwarder")]
+            daemons += [_get_daemon("post-process-forwarder-transactions")]
 
         if settings.SENTRY_EXTRA_WORKERS:
             daemons.extend([_get_daemon(name) for name in settings.SENTRY_EXTRA_WORKERS])
@@ -264,7 +283,11 @@ and run `sentry devservices up kafka zookeeper`.
                     "`SENTRY_USE_METRICS_DEV` can only be used when "
                     "`SENTRY_EVENTSTREAM=sentry.eventstream.kafka.KafkaEventStream`."
                 )
-            daemons += [_get_daemon("metrics")]
+            daemons += [
+                _get_daemon("metrics-rh"),
+                _get_daemon("metrics-perf"),
+                _get_daemon("metrics-billing"),
+            ]
 
     if settings.SENTRY_USE_RELAY:
         daemons += [_get_daemon("ingest")]
@@ -310,7 +333,7 @@ and run `sentry devservices up kafka zookeeper`.
     # If we don't need any other daemons, just launch a normal uwsgi webserver
     # and avoid dealing with subprocesses
     if not daemons:
-        return server.run()
+        server.run()
 
     import sys
     from subprocess import list2cmdline

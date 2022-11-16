@@ -23,6 +23,7 @@ import {
   getSiblingGroupKey,
   getSpanID,
   getSpanOperation,
+  groupShouldBeHidden,
   isEventFromBrowserJavaScriptSDK,
   isOrphanSpan,
   parseTrace,
@@ -81,7 +82,6 @@ class SpanTreeModel {
       showEmbeddedChildren: observable,
       embeddedChildren: observable,
       fetchEmbeddedChildrenState: observable,
-      toggleEmbeddedChildren: action,
       fetchEmbeddedTransactions: action,
       isNestedSpanGroupExpanded: observable,
       toggleNestedSpanGroup: action,
@@ -186,20 +186,22 @@ class SpanTreeModel {
   getSpansList = (props: {
     addTraceBounds: (bounds: TraceBound) => void;
     continuingTreeDepths: Array<TreeDepthType>;
+    directParent: SpanTreeModel | null;
     event: Readonly<EventTransaction>;
     filterSpans: FilterSpans | undefined;
     generateBounds: (bounds: SpanBoundsType) => SpanGeneratedBoundsType;
-    hiddenSpanSubTrees: Set<String>;
+    hiddenSpanSubTrees: Set<string>;
     isLastSibling: boolean;
     isNestedSpanGroupExpanded: boolean;
     isOnlySibling: boolean;
     operationNameFilters: ActiveOperationFilter;
     previousSiblingEndTimestamp: number | undefined;
     removeTraceBounds: (eventSlug: string) => void;
-    spanAncestors: Set<String>;
+    spanAncestors: Set<string>;
     spanNestedGrouping: EnhancedSpan[] | undefined;
     toggleNestedSpanGroup: (() => void) | undefined;
     treeDepth: number;
+    focusedSpanIds?: Set<string>;
   }): EnhancedProcessedSpanType[] => {
     const {
       operationNameFilters,
@@ -217,9 +219,9 @@ class SpanTreeModel {
       isNestedSpanGroupExpanded,
       addTraceBounds,
       removeTraceBounds,
+      focusedSpanIds,
     } = props;
     let {treeDepth, continuingTreeDepths} = props;
-
     const parentSpanID = getSpanID(this.span);
     const nextSpanAncestors = new Set(spanAncestors);
     nextSpanAncestors.add(parentSpanID);
@@ -279,7 +281,7 @@ class SpanTreeModel {
       continuingTreeDepths,
       fetchEmbeddedChildrenState: this.fetchEmbeddedChildrenState,
       showEmbeddedChildren: this.showEmbeddedChildren,
-      toggleEmbeddedChildren: this.toggleEmbeddedChildren({
+      toggleEmbeddedChildren: this.makeToggleEmbeddedChildren({
         addTraceBounds,
         removeTraceBounds,
       }),
@@ -419,6 +421,8 @@ class SpanTreeModel {
                   : false,
                 addTraceBounds,
                 removeTraceBounds,
+                focusedSpanIds,
+                directParent: this,
               })
             );
 
@@ -428,18 +432,15 @@ class SpanTreeModel {
           return acc;
         }
 
-        // NOTE: I am making the assumption here that grouped sibling spans will not have children.
-        // By making this assumption, I can immediately wrap the grouped spans here without having
-        // to recursively traverse them.
-
-        // This may not be the case, and needs to be looked into later
-
         const key = getSiblingGroupKey(group[0].span, occurrence);
         if (this.expandedSiblingGroups.has(key)) {
           // This check is needed here, since it is possible that a user could be filtering for a specific span ID.
           // In this case, we must add only the specified span into the accumulator's descendants
           group.forEach((spanModel, index) => {
-            if (this.isSpanFilteredOut(props, spanModel)) {
+            if (
+              this.isSpanFilteredOut(props, spanModel) ||
+              (focusedSpanIds && !focusedSpanIds.has(spanModel.span.span_id))
+            ) {
               acc.descendants.push({
                 type: 'filtered_out',
                 span: spanModel.span,
@@ -458,7 +459,7 @@ class SpanTreeModel {
                 continuingTreeDepths: descendantContinuingTreeDepths,
                 fetchEmbeddedChildrenState: spanModel.fetchEmbeddedChildrenState,
                 showEmbeddedChildren: spanModel.showEmbeddedChildren,
-                toggleEmbeddedChildren: spanModel.toggleEmbeddedChildren({
+                toggleEmbeddedChildren: spanModel.makeToggleEmbeddedChildren({
                   addTraceBounds,
                   removeTraceBounds,
                 }),
@@ -480,13 +481,16 @@ class SpanTreeModel {
         // Since we are not recursively traversing elements in this group, need to check
         // if the spans are filtered or out of bounds here
 
-        if (this.isSpanFilteredOut(props, group[0])) {
-          group.forEach(spanModel =>
+        if (
+          this.isSpanFilteredOut(props, group[0]) ||
+          groupShouldBeHidden(group, focusedSpanIds)
+        ) {
+          group.forEach(spanModel => {
             acc.descendants.push({
               type: 'filtered_out',
               span: spanModel.span,
-            })
-          );
+            });
+          });
           return acc;
         }
 
@@ -519,7 +523,7 @@ class SpanTreeModel {
             continuingTreeDepths: descendantContinuingTreeDepths,
             fetchEmbeddedChildrenState: spanModel.fetchEmbeddedChildrenState,
             showEmbeddedChildren: spanModel.showEmbeddedChildren,
-            toggleEmbeddedChildren: spanModel.toggleEmbeddedChildren({
+            toggleEmbeddedChildren: spanModel.makeToggleEmbeddedChildren({
               addTraceBounds,
               removeTraceBounds,
             }),
@@ -555,7 +559,10 @@ class SpanTreeModel {
       }
     ).descendants;
 
-    if (this.isSpanFilteredOut(props, this)) {
+    if (
+      this.isSpanFilteredOut(props, this) ||
+      (focusedSpanIds && !focusedSpanIds.has(this.span.span_id))
+    ) {
       return [
         {
           type: 'filtered_out',
@@ -657,15 +664,14 @@ class SpanTreeModel {
     return [wrappedSpan, ...descendants];
   };
 
-  toggleEmbeddedChildren =
-    ({
-      addTraceBounds,
-      removeTraceBounds,
-    }: {
-      addTraceBounds: (bounds: TraceBound) => void;
-      removeTraceBounds: (eventSlug: string) => void;
-    }) =>
-    (props: {eventSlug: string; orgSlug: string}) => {
+  makeToggleEmbeddedChildren = ({
+    addTraceBounds,
+    removeTraceBounds,
+  }: {
+    addTraceBounds: (bounds: TraceBound) => void;
+    removeTraceBounds: (eventSlug: string) => void;
+  }) =>
+    action('toggleEmbeddedChildren', (props: {eventSlug: string; orgSlug: string}) => {
       this.showEmbeddedChildren = !this.showEmbeddedChildren;
       this.fetchEmbeddedChildrenState = 'idle';
 
@@ -687,7 +693,7 @@ class SpanTreeModel {
       }
 
       return Promise.resolve(undefined);
-    };
+    });
 
   fetchEmbeddedTransactions({
     orgSlug,

@@ -68,11 +68,25 @@ export default function getConfiguration({
           ),
         },
         {
-          path: `${pathPrefix}/sampling/`,
-          title: t('Sampling'),
-          show: () => !!organization?.features?.includes('filters-and-sampling'),
-          description: t("Manage an organization's inbound data"),
-          badge: () => 'new',
+          path: `${pathPrefix}/dynamic-sampling/`,
+          title: t('Dynamic Sampling'),
+          show: () => {
+            const orgFeatures = organization?.features ?? [];
+            if (
+              orgFeatures.includes('server-side-sampling') &&
+              (orgFeatures.includes('dynamic-sampling-deprecated') ||
+                orgFeatures.includes('dynamic-sampling'))
+            ) {
+              return true;
+            }
+
+            return false;
+          },
+          description: t(
+            "Per-Project basis solution to configure sampling rules within Sentry's UI"
+          ),
+          badge: () =>
+            organization?.features.includes('dynamic-sampling') ? 'new' : 'beta',
         },
         {
           path: `${pathPrefix}/security-and-privacy/`,

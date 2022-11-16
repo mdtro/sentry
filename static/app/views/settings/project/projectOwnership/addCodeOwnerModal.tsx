@@ -6,8 +6,8 @@ import {ModalRenderProps} from 'sentry/actionCreators/modal';
 import Alert from 'sentry/components/alert';
 import AsyncComponent from 'sentry/components/asyncComponent';
 import Button from 'sentry/components/button';
+import SelectField from 'sentry/components/forms/fields/selectField';
 import Form from 'sentry/components/forms/form';
-import SelectField from 'sentry/components/forms/selectField';
 import Link from 'sentry/components/links/link';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import {Panel, PanelBody} from 'sentry/components/panels';
@@ -113,15 +113,17 @@ class AddCodeOwnerModal extends AsyncComponent<Props, State> {
             data: postData,
           }
         );
+
         const codeMapping = codeMappings.find(
           mapping => mapping.id === codeMappingId?.toString()
         );
+
         this.handleAddedFile({...data, codeMapping});
       } catch (err) {
         if (err.responseJSON.raw) {
           this.setState({error: true, errorJSON: err.responseJSON, isLoading: false});
         } else {
-          addErrorMessage(t(Object.values(err.responseJSON).flat().join(' ')));
+          addErrorMessage(Object.values(err.responseJSON).flat().join(' '));
         }
       }
     }
@@ -138,7 +140,7 @@ class AddCodeOwnerModal extends AsyncComponent<Props, State> {
         <SourceFileBody>
           <IconCheckmark size="md" isCircled color="green200" />
           {codeownersFile.filepath}
-          <Button size="small" href={codeownersFile.html_url} target="_blank">
+          <Button size="sm" href={codeownersFile.html_url} external>
             {t('Preview File')}
           </Button>
         </SourceFileBody>
@@ -224,7 +226,7 @@ class AddCodeOwnerModal extends AsyncComponent<Props, State> {
                   {t('Install a GitHub or GitLab integration to use this feature.')}
                 </div>
                 <Container style={{paddingTop: space(2)}}>
-                  <Button type="button" priority="primary" size="small" to={baseUrl}>
+                  <Button type="button" priority="primary" size="sm" to={baseUrl}>
                     Setup Integration
                   </Button>
                 </Container>

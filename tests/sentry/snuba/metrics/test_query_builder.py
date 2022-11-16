@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from unittest import mock
@@ -7,6 +8,7 @@ import pytz
 from django.utils.datastructures import MultiValueDict
 from freezegun import freeze_time
 from snuba_sdk import (
+    AliasedExpression,
     And,
     Column,
     Condition,
@@ -22,9 +24,16 @@ from snuba_sdk import (
     Query,
 )
 
-from sentry.sentry_metrics.indexer.mock import MockIndexer
-from sentry.sentry_metrics.indexer.strings import SHARED_TAG_STRINGS
-from sentry.sentry_metrics.utils import resolve, resolve_tag_key, resolve_weak
+from sentry.api.utils import InvalidParams
+from sentry.sentry_metrics import indexer
+from sentry.sentry_metrics.configuration import UseCaseKey
+from sentry.sentry_metrics.utils import (
+    resolve,
+    resolve_tag_key,
+    resolve_tag_value,
+    resolve_tag_values,
+    resolve_weak,
+)
 from sentry.snuba.dataset import EntityKey
 from sentry.snuba.metrics import (
     MAX_POINTS,
@@ -36,6 +45,12 @@ from sentry.snuba.metrics import (
     get_intervals,
     parse_query,
     resolve_tags,
+    translate_meta_results,
+)
+from sentry.snuba.metrics.fields.base import (
+    COMPOSITE_ENTITY_CONSTITUENT_ALIAS,
+    CompositeEntityDerivedMetric,
+    SingularEntityDerivedMetric,
 )
 from sentry.snuba.metrics.fields.snql import (
     abnormal_sessions,
@@ -47,10 +62,15 @@ from sentry.snuba.metrics.fields.snql import (
     errored_preaggr_sessions,
     uniq_aggregation_on_metric,
 )
+from sentry.snuba.metrics.naming_layer import SessionMetricKey
 from sentry.snuba.metrics.naming_layer.mapping import get_mri
-from sentry.snuba.metrics.naming_layer.mri import SessionMRI
-from sentry.snuba.metrics.query import MetricField
+from sentry.snuba.metrics.naming_layer.mri import SessionMRI, TransactionMRI
+from sentry.snuba.metrics.query import MetricConditionField, MetricField, MetricGroupByField
 from sentry.snuba.metrics.query_builder import QueryDefinition
+from sentry.testutils import TestCase
+from sentry.testutils.helpers.datetime import before_now
+
+pytestmark = pytest.mark.sentry_metrics
 
 
 @dataclass
@@ -61,9 +81,10 @@ class PseudoProject:
 
 MOCK_NOW = datetime(2021, 8, 25, 23, 59, tzinfo=pytz.utc)
 ORG_ID = 1
+USE_CASE_ID = UseCaseKey.RELEASE_HEALTH
 
 
-def get_entity_of_metric_mocked(_, metric_name):
+def get_entity_of_metric_mocked(_, metric_name, use_case_id):
     return {
         "sentry.sessions.session": EntityKey.MetricsCounters,
         SessionMRI.SESSION.value: EntityKey.MetricsCounters,
@@ -72,35 +93,44 @@ def get_entity_of_metric_mocked(_, metric_name):
     }[metric_name]
 
 
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     "query_string,expected",
     [
         (
             'release:""',
-            [
+            lambda: [
                 Condition(
-                    Column(name=resolve_tag_key(ORG_ID, "release")),
+                    Column(name=resolve_tag_key(USE_CASE_ID, ORG_ID, "release")),
                     Op.IN,
-                    rhs=[resolve(ORG_ID, "")],
+                    rhs=resolve_tag_values(USE_CASE_ID, ORG_ID, [""]),
                 )
             ],
         ),
         (
             "release:myapp@2.0.0",
-            [Condition(Column(name=resolve_tag_key(ORG_ID, "release")), Op.IN, rhs=[10000])],
+            lambda: [
+                Condition(
+                    Column(name=resolve_tag_key(USE_CASE_ID, ORG_ID, "release")),
+                    Op.IN,
+                    rhs=resolve_tag_values(USE_CASE_ID, ORG_ID, ["myapp@2.0.0"]),
+                )
+            ],
         ),
         (
             "release:myapp@2.0.0 and environment:production",
-            [
+            lambda: [
                 And(
                     [
                         Condition(
-                            Column(name=resolve_tag_key(ORG_ID, "release")), Op.IN, rhs=[10000]
+                            Column(name=resolve_tag_key(USE_CASE_ID, ORG_ID, "release")),
+                            Op.IN,
+                            rhs=resolve_tag_values(USE_CASE_ID, ORG_ID, ["myapp@2.0.0"]),
                         ),
                         Condition(
-                            Column(name=resolve_tag_key(ORG_ID, "environment")),
+                            Column(name=resolve_tag_key(USE_CASE_ID, ORG_ID, "environment")),
                             Op.EQ,
-                            rhs=resolve(ORG_ID, "production"),
+                            rhs=resolve_tag_value(USE_CASE_ID, ORG_ID, "production"),
                         ),
                     ]
                 )
@@ -108,27 +138,33 @@ def get_entity_of_metric_mocked(_, metric_name):
         ),
         (
             "release:myapp@2.0.0 environment:production",
-            [
-                Condition(Column(name=resolve_tag_key(ORG_ID, "release")), Op.IN, rhs=[10000]),
+            lambda: [
                 Condition(
-                    Column(name=resolve_tag_key(ORG_ID, "environment")),
+                    Column(name=resolve_tag_key(USE_CASE_ID, ORG_ID, "release")),
+                    Op.IN,
+                    rhs=resolve_tag_values(USE_CASE_ID, ORG_ID, ["myapp@2.0.0"]),
+                ),
+                Condition(
+                    Column(name=resolve_tag_key(USE_CASE_ID, ORG_ID, "environment")),
                     Op.EQ,
-                    rhs=resolve(ORG_ID, "production"),
+                    rhs=resolve_tag_value(USE_CASE_ID, ORG_ID, "production"),
                 ),
             ],
         ),
         (
             "release:myapp@2.0.0 and environment:production",
-            [
+            lambda: [
                 And(
                     [
                         Condition(
-                            Column(name=resolve_tag_key(ORG_ID, "release")), Op.IN, rhs=[10000]
+                            Column(name=resolve_tag_key(USE_CASE_ID, ORG_ID, "release")),
+                            Op.IN,
+                            rhs=resolve_tag_values(USE_CASE_ID, ORG_ID, ["myapp@2.0.0"]),
                         ),
                         Condition(
-                            Column(name=resolve_tag_key(ORG_ID, "environment")),
+                            Column(name=resolve_tag_key(USE_CASE_ID, ORG_ID, "environment")),
                             Op.EQ,
-                            rhs=resolve(ORG_ID, "production"),
+                            rhs=resolve_tag_value(USE_CASE_ID, ORG_ID, "production"),
                         ),
                     ]
                 ),
@@ -136,50 +172,65 @@ def get_entity_of_metric_mocked(_, metric_name):
         ),
         (
             'transaction:"/bar/:orgId/"',
-            [Condition(Column(name=resolve_tag_key(ORG_ID, "transaction")), Op.EQ, rhs=10001)],
+            lambda: [
+                Condition(
+                    Function(
+                        function="transform",
+                        parameters=[
+                            Column(name=resolve_tag_key(USE_CASE_ID, ORG_ID, "transaction")),
+                            [""],
+                            [resolve_tag_value(USE_CASE_ID, ORG_ID, "<< unparameterized >>")],
+                        ],
+                    ),
+                    Op.EQ,
+                    rhs=resolve_tag_value(USE_CASE_ID, ORG_ID, "/bar/:orgId/"),
+                )
+            ],
         ),
         (
             "release:[production,foo]",
-            [
+            lambda: [
                 Condition(
-                    Column(name=resolve_tag_key(ORG_ID, "release")),
+                    Column(name=resolve_tag_key(USE_CASE_ID, ORG_ID, "release")),
                     Op.IN,
-                    rhs=[SHARED_TAG_STRINGS["production"]],
+                    rhs=resolve_tag_values(USE_CASE_ID, ORG_ID, ["production", "foo"]),
                 )
             ],
         ),
         (
             "!release:[production,foo]",
-            [
+            lambda: [
                 Condition(
-                    Column(name=resolve_tag_key(ORG_ID, "release")),
+                    Column(name=resolve_tag_key(USE_CASE_ID, ORG_ID, "release")),
                     Op.NOT_IN,
-                    rhs=[SHARED_TAG_STRINGS["production"]],
+                    rhs=resolve_tag_values(USE_CASE_ID, ORG_ID, ["production", "foo"]),
                 )
             ],
         ),
         (
             "release:[foo]",
-            [
+            lambda: [
                 Condition(
-                    Column(name=resolve_tag_key(ORG_ID, "release")),
+                    Column(name=resolve_tag_key(USE_CASE_ID, ORG_ID, "release")),
                     Op.IN,
-                    rhs=[],
+                    rhs=resolve_tag_values(USE_CASE_ID, ORG_ID, ["foo"]),
                 )
             ],
         ),
         (
             "release:myapp@2.0.0 or environment:[production,staging]",
-            [
+            lambda: [
                 Or(
                     [
                         Condition(
-                            Column(name=resolve_tag_key(ORG_ID, "release")), Op.IN, rhs=[10000]
+                            Column(name=resolve_tag_key(USE_CASE_ID, ORG_ID, "release")),
+                            Op.IN,
+                            rhs=resolve_tag_values(USE_CASE_ID, ORG_ID, ["myapp@2.0.0"]),
                         ),
                         Condition(
-                            Column(name=resolve_tag_key(ORG_ID, "environment")),
+                            Column(name=resolve_tag_key(USE_CASE_ID, ORG_ID, "environment")),
                             Op.IN,
-                            rhs=[resolve(ORG_ID, "production"), resolve(ORG_ID, "staging")],
+                            rhs=resolve_tag_values(USE_CASE_ID, ORG_ID, ["production", "staging"]),
                         ),
                     ]
                 ),
@@ -187,15 +238,18 @@ def get_entity_of_metric_mocked(_, metric_name):
         ),
     ],
 )
-def test_parse_query(monkeypatch, query_string, expected):
+def test_parse_query(query_string, expected):
     org_id = ORG_ID
-    local_indexer = MockIndexer()
+    use_case_id = UseCaseKey.RELEASE_HEALTH
     for s in ("myapp@2.0.0", "/bar/:orgId/"):
         # will be values 10000, 10001 respectively
-        local_indexer.record(org_id, s)
-    monkeypatch.setattr("sentry.sentry_metrics.indexer.resolve", local_indexer.resolve)
-    parsed = resolve_tags(org_id, parse_query(query_string, []))
-    assert parsed == expected
+        indexer.record(use_case_id=use_case_id, org_id=org_id, string=s)
+    parsed = resolve_tags(
+        use_case_id,
+        org_id,
+        parse_query(query_string, []),
+    )
+    assert parsed == expected()
 
 
 @freeze_time("2018-12-11 03:21:00")
@@ -243,28 +297,28 @@ def test_timestamps():
 
 @mock.patch("sentry.snuba.sessions_v2.get_now", return_value=MOCK_NOW)
 @mock.patch("sentry.api.utils.timezone.now", return_value=MOCK_NOW)
-def test_build_snuba_query(mock_now, mock_now2, monkeypatch):
-    monkeypatch.setattr("sentry.sentry_metrics.indexer.resolve", MockIndexer().resolve)
+def test_build_snuba_query(mock_now, mock_now2):
     # Your typical release health query querying everything
     query_definition = MetricsQuery(
         org_id=1,
         project_ids=[1],
         select=[
-            MetricField("sum", "sentry.sessions.session"),
-            MetricField("count_unique", "sentry.sessions.user"),
-            MetricField("p95", "sentry.sessions.session.duration"),
+            MetricField("sum", SessionMRI.SESSION.value),
+            MetricField("count_unique", SessionMRI.USER.value),
+            MetricField("p95", SessionMRI.RAW_DURATION.value),
         ],
         start=MOCK_NOW - timedelta(days=90),
         end=MOCK_NOW,
         granularity=Granularity(3600),
         where=[Condition(Column("release"), Op.EQ, "staging")],
-        groupby=["environment"],
+        groupby=[MetricGroupByField("environment")],
     )
     snuba_queries, _ = SnubaQueryBuilder(
-        [PseudoProject(1, 1)], query_definition
+        [PseudoProject(1, 1)], query_definition, use_case_id=UseCaseKey.RELEASE_HEALTH
     ).get_snuba_queries()
 
     org_id = 1
+    use_case_id = UseCaseKey.RELEASE_HEALTH
 
     def expected_query(match, select, extra_groupby, metric_name):
         function, column, alias = select
@@ -277,13 +331,21 @@ def test_build_snuba_query(mock_now, mock_now2, monkeypatch):
                         Column("value"),
                         Function(
                             "equals",
-                            [Column("metric_id"), resolve_weak(org_id, get_mri(metric_name))],
+                            [
+                                Column("metric_id"),
+                                resolve_weak(use_case_id, org_id, get_mri(metric_name)),
+                            ],
                         ),
                     ],
-                    alias=f"{alias}({get_mri(metric_name)})",
+                    alias=f"{alias}({metric_name})",
                 )
             ],
-            groupby=[Column(resolve_tag_key(org_id, "environment"))] + extra_groupby,
+            groupby=[
+                AliasedExpression(
+                    Column(resolve_tag_key(use_case_id, org_id, "environment")), alias="environment"
+                )
+            ]
+            + extra_groupby,
             where=[
                 Condition(Column("org_id"), Op.EQ, 1),
                 Condition(Column("project_id"), Op.IN, [1]),
@@ -294,9 +356,15 @@ def test_build_snuba_query(mock_now, mock_now2, monkeypatch):
                     Column("timestamp"), Op.LT, datetime(2021, 8, 25, 23, 59, tzinfo=pytz.utc)
                 ),
                 Condition(
-                    Column(resolve_tag_key(org_id, "release")), Op.EQ, resolve(org_id, "staging")
+                    Column(resolve_tag_key(use_case_id, org_id, "release")),
+                    Op.EQ,
+                    resolve_tag_value(use_case_id, org_id, "staging"),
                 ),
-                Condition(Column("metric_id"), Op.IN, [resolve_weak(org_id, get_mri(metric_name))]),
+                Condition(
+                    Column("metric_id"),
+                    Op.IN,
+                    [resolve_weak(use_case_id, org_id, get_mri(metric_name))],
+                ),
             ],
             # totals: MAX_POINTS // (90d * 24h)
             # series: totals * (90d * 24h)
@@ -355,9 +423,9 @@ def test_build_snuba_query(mock_now, mock_now2, monkeypatch):
 @mock.patch(
     "sentry.snuba.metrics.fields.base._get_entity_of_metric_mri", get_entity_of_metric_mocked
 )
-def test_build_snuba_query_derived_metrics(mock_now, mock_now2, monkeypatch):
+def test_build_snuba_query_derived_metrics(mock_now, mock_now2):
     org_id = 1
-    monkeypatch.setattr("sentry.sentry_metrics.indexer.resolve", MockIndexer().resolve)
+    use_case_id = UseCaseKey.RELEASE_HEALTH
     # Your typical release health query querying everything
     query_params = MultiValueDict(
         {
@@ -372,17 +440,31 @@ def test_build_snuba_query_derived_metrics(mock_now, mock_now2, monkeypatch):
         }
     )
     query_definition = QueryDefinition([PseudoProject(1, 1)], query_params)
-    query_builder = SnubaQueryBuilder([PseudoProject(1, 1)], query_definition.to_metrics_query())
+    query_builder = SnubaQueryBuilder(
+        [PseudoProject(1, 1)], query_definition.to_metrics_query(), use_case_id
+    )
     snuba_queries, fields_in_entities = query_builder.get_snuba_queries()
     assert fields_in_entities == {
         "metrics_counters": [
-            (None, SessionMRI.ERRORED_PREAGGREGATED.value),
-            (None, SessionMRI.CRASHED_AND_ABNORMAL.value),
-            (None, SessionMRI.CRASH_FREE_RATE.value),
-            (None, SessionMRI.ALL.value),
+            (
+                None,
+                SessionMRI.ERRORED_PREAGGREGATED.value,
+                f"{SessionMRI.ERRORED_PREAGGREGATED.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}",
+            ),
+            (
+                None,
+                SessionMRI.CRASHED_AND_ABNORMAL.value,
+                f"{SessionMRI.CRASHED_AND_ABNORMAL.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}",
+            ),
+            (None, SessionMRI.CRASH_FREE_RATE.value, SessionMetricKey.CRASH_FREE_RATE.value),
+            (None, SessionMRI.ALL.value, SessionMetricKey.ALL.value),
         ],
         "metrics_sets": [
-            (None, SessionMRI.ERRORED_SET.value),
+            (
+                None,
+                SessionMRI.ERRORED_SET.value,
+                f"{SessionMRI.ERRORED_SET.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}",
+            ),
         ],
     }
     for key in ("totals", "series"):
@@ -393,42 +475,50 @@ def test_build_snuba_query_derived_metrics(mock_now, mock_now2, monkeypatch):
                 select=[
                     errored_preaggr_sessions(
                         org_id,
-                        metric_ids=[resolve_weak(org_id, SessionMRI.SESSION.value)],
-                        alias=SessionMRI.ERRORED_PREAGGREGATED.value,
+                        metric_ids=[resolve_weak(use_case_id, org_id, SessionMRI.SESSION.value)],
+                        alias=f"{SessionMRI.ERRORED_PREAGGREGATED.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}",
                     ),
                     addition(
                         crashed_sessions(
                             org_id,
-                            metric_ids=[resolve_weak(org_id, SessionMRI.SESSION.value)],
+                            metric_ids=[
+                                resolve_weak(use_case_id, org_id, SessionMRI.SESSION.value)
+                            ],
                             alias=SessionMRI.CRASHED.value,
                         ),
                         abnormal_sessions(
                             org_id,
-                            metric_ids=[resolve_weak(org_id, SessionMRI.SESSION.value)],
+                            metric_ids=[
+                                resolve_weak(use_case_id, org_id, SessionMRI.SESSION.value)
+                            ],
                             alias=SessionMRI.ABNORMAL.value,
                         ),
-                        alias=SessionMRI.CRASHED_AND_ABNORMAL.value,
+                        alias=f"{SessionMRI.CRASHED_AND_ABNORMAL.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}",
                     ),
                     complement(
                         division_float(
                             crashed_sessions(
                                 org_id,
-                                metric_ids=[resolve_weak(org_id, SessionMRI.SESSION.value)],
+                                metric_ids=[
+                                    resolve_weak(use_case_id, org_id, SessionMRI.SESSION.value)
+                                ],
                                 alias=SessionMRI.CRASHED.value,
                             ),
                             all_sessions(
                                 org_id,
-                                metric_ids=[resolve_weak(org_id, SessionMRI.SESSION.value)],
+                                metric_ids=[
+                                    resolve_weak(use_case_id, org_id, SessionMRI.SESSION.value)
+                                ],
                                 alias=SessionMRI.ALL.value,
                             ),
                             alias=SessionMRI.CRASH_RATE.value,
                         ),
-                        alias=SessionMRI.CRASH_FREE_RATE.value,
+                        alias=SessionMetricKey.CRASH_FREE_RATE.value,
                     ),
                     all_sessions(
                         org_id,
-                        metric_ids=[resolve_weak(org_id, SessionMRI.SESSION.value)],
-                        alias=SessionMRI.ALL.value,
+                        metric_ids=[resolve_weak(use_case_id, org_id, SessionMRI.SESSION.value)],
+                        alias=SessionMetricKey.ALL.value,
                     ),
                 ],
                 groupby=groupby,
@@ -444,7 +534,7 @@ def test_build_snuba_query_derived_metrics(mock_now, mock_now2, monkeypatch):
                     Condition(
                         Column("metric_id"),
                         Op.IN,
-                        [resolve_weak(org_id, SessionMRI.SESSION.value)],
+                        [resolve_weak(use_case_id, org_id, SessionMRI.SESSION.value)],
                     ),
                 ],
                 limit=Limit(MAX_POINTS // 2) if key == "totals" else Limit(MAX_POINTS),
@@ -457,8 +547,8 @@ def test_build_snuba_query_derived_metrics(mock_now, mock_now2, monkeypatch):
                 match=Entity("metrics_sets"),
                 select=[
                     uniq_aggregation_on_metric(
-                        metric_ids=[resolve_weak(org_id, SessionMRI.ERROR.value)],
-                        alias=SessionMRI.ERRORED_SET.value,
+                        metric_ids=[resolve_weak(use_case_id, org_id, SessionMRI.ERROR.value)],
+                        alias=f"{SessionMRI.ERRORED_SET.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}",
                     ),
                 ],
                 groupby=groupby,
@@ -474,7 +564,7 @@ def test_build_snuba_query_derived_metrics(mock_now, mock_now2, monkeypatch):
                     Condition(
                         Column("metric_id"),
                         Op.IN,
-                        [resolve_weak(org_id, SessionMRI.ERROR.value)],
+                        [resolve_weak(use_case_id, org_id, SessionMRI.ERROR.value)],
                     ),
                 ],
                 limit=Limit(MAX_POINTS // 2) if key == "totals" else Limit(MAX_POINTS),
@@ -484,15 +574,15 @@ def test_build_snuba_query_derived_metrics(mock_now, mock_now2, monkeypatch):
         )
 
 
+@pytest.mark.django_db
 @mock.patch("sentry.snuba.sessions_v2.get_now", return_value=MOCK_NOW)
 @mock.patch("sentry.api.utils.timezone.now", return_value=MOCK_NOW)
-def test_build_snuba_query_orderby(mock_now, mock_now2, monkeypatch):
-    monkeypatch.setattr("sentry.sentry_metrics.indexer.resolve", MockIndexer().resolve)
+def test_build_snuba_query_orderby(mock_now, mock_now2):
     query_params = MultiValueDict(
         {
             "query": [
                 "release:staging"
-            ],  # weird release but we need a string exising in mock indexer
+            ],  # weird release but we need a string existing in mock indexer
             "groupBy": ["environment"],
             "field": [
                 "sum(sentry.sessions.session)",
@@ -505,10 +595,11 @@ def test_build_snuba_query_orderby(mock_now, mock_now2, monkeypatch):
         [PseudoProject(1, 1)], query_params, paginator_kwargs={"limit": 3}
     )
     snuba_queries, _ = SnubaQueryBuilder(
-        [PseudoProject(1, 1)], query_definition.to_metrics_query()
+        [PseudoProject(1, 1)], query_definition.to_metrics_query(), UseCaseKey.RELEASE_HEALTH
     ).get_snuba_queries()
 
     org_id = 1
+    use_case_id = UseCaseKey.RELEASE_HEALTH
 
     counter_queries = snuba_queries.pop("metrics_counters")
     assert not snuba_queries
@@ -519,16 +610,21 @@ def test_build_snuba_query_orderby(mock_now, mock_now2, monkeypatch):
         OP_TO_SNUBA_FUNCTION["metrics_counters"]["sum"],
         [
             Column("value"),
-            Function("equals", [Column("metric_id"), resolve_weak(org_id, get_mri(metric_name))]),
+            Function(
+                "equals",
+                [Column("metric_id"), resolve_weak(use_case_id, org_id, get_mri(metric_name))],
+            ),
         ],
-        alias=f"{op}({get_mri(metric_name)})",
+        alias=f"{op}({metric_name})",
     )
 
     assert counter_queries["totals"] == Query(
         match=Entity("metrics_counters"),
         select=[select],
         groupby=[
-            Column(resolve_tag_key(org_id, "environment")),
+            AliasedExpression(
+                Column(resolve_tag_key(use_case_id, org_id, "environment")), alias="environment"
+            ),
         ],
         where=[
             Condition(Column("org_id"), Op.EQ, 1),
@@ -536,11 +632,13 @@ def test_build_snuba_query_orderby(mock_now, mock_now2, monkeypatch):
             Condition(Column("timestamp"), Op.GTE, datetime(2021, 8, 25, 0, tzinfo=pytz.utc)),
             Condition(Column("timestamp"), Op.LT, datetime(2021, 8, 26, 0, tzinfo=pytz.utc)),
             Condition(
-                Column(resolve_tag_key(org_id, "release"), entity=None),
+                Column(resolve_tag_key(use_case_id, org_id, "release"), entity=None),
                 Op.IN,
-                [resolve(org_id, "staging")],
+                resolve_tag_values(use_case_id, org_id, ["staging"]),
             ),
-            Condition(Column("metric_id"), Op.IN, [resolve(org_id, get_mri(metric_name))]),
+            Condition(
+                Column("metric_id"), Op.IN, [resolve(use_case_id, org_id, get_mri(metric_name))]
+            ),
         ],
         orderby=[OrderBy(select, Direction.DESC)],
         limit=Limit(3),
@@ -551,7 +649,9 @@ def test_build_snuba_query_orderby(mock_now, mock_now2, monkeypatch):
         match=Entity("metrics_counters"),
         select=[select],
         groupby=[
-            Column(resolve_tag_key(org_id, "environment")),
+            AliasedExpression(
+                Column(resolve_tag_key(use_case_id, org_id, "environment")), alias="environment"
+            ),
             Column("bucketed_time"),
         ],
         where=[
@@ -560,11 +660,13 @@ def test_build_snuba_query_orderby(mock_now, mock_now2, monkeypatch):
             Condition(Column("timestamp"), Op.GTE, datetime(2021, 8, 25, 0, tzinfo=pytz.utc)),
             Condition(Column("timestamp"), Op.LT, datetime(2021, 8, 26, 0, tzinfo=pytz.utc)),
             Condition(
-                Column(resolve_tag_key(org_id, "release"), entity=None),
+                Column(resolve_tag_key(use_case_id, org_id, "release"), entity=None),
                 Op.IN,
-                [resolve(org_id, "staging")],
+                resolve_tag_values(use_case_id, org_id, ["staging"]),
             ),
-            Condition(Column("metric_id"), Op.IN, [resolve(org_id, get_mri(metric_name))]),
+            Condition(
+                Column("metric_id"), Op.IN, [resolve(use_case_id, org_id, get_mri(metric_name))]
+            ),
         ],
         orderby=[OrderBy(select, Direction.DESC)],
         limit=Limit(72),
@@ -573,10 +675,10 @@ def test_build_snuba_query_orderby(mock_now, mock_now2, monkeypatch):
     )
 
 
+@pytest.mark.django_db
 @mock.patch("sentry.snuba.sessions_v2.get_now", return_value=MOCK_NOW)
 @mock.patch("sentry.api.utils.timezone.now", return_value=MOCK_NOW)
-def test_build_snuba_query_with_derived_alias(mock_now, mock_now2, monkeypatch):
-    monkeypatch.setattr("sentry.sentry_metrics.indexer.resolve", MockIndexer().resolve)
+def test_build_snuba_query_with_derived_alias(mock_now, mock_now2):
     query_params = MultiValueDict(
         {
             "query": ["release:staging"],
@@ -591,10 +693,13 @@ def test_build_snuba_query_with_derived_alias(mock_now, mock_now2, monkeypatch):
         [PseudoProject(1, 1)], query_params, paginator_kwargs={"limit": 3}
     )
     snuba_queries, _ = SnubaQueryBuilder(
-        [PseudoProject(1, 1)], query_definition.to_metrics_query()
+        [PseudoProject(1, 1)],
+        query_definition.to_metrics_query(),
+        UseCaseKey.RELEASE_HEALTH,
     ).get_snuba_queries()
 
     org_id = 1
+    use_case_id = UseCaseKey.RELEASE_HEALTH
 
     distribution_queries = snuba_queries.pop("metrics_distributions")
     assert not snuba_queries
@@ -603,13 +708,14 @@ def test_build_snuba_query_with_derived_alias(mock_now, mock_now2, monkeypatch):
 
     conditions = [
         Function(
-            "equals", [Column("metric_id"), resolve_weak(org_id, SessionMRI.RAW_DURATION.value)]
+            "equals",
+            [Column("metric_id"), resolve_weak(use_case_id, org_id, SessionMRI.RAW_DURATION.value)],
         ),
         Function(
             "equals",
             (
-                Column(f"tags[{resolve_weak(org_id, 'session.status')}]"),
-                resolve_weak(org_id, "exited"),
+                Column(f"tags[{resolve_weak(use_case_id, org_id, 'session.status')}]"),
+                resolve_tag_value(use_case_id, org_id, "exited"),
             ),
         ),
     ]
@@ -620,13 +726,15 @@ def test_build_snuba_query_with_derived_alias(mock_now, mock_now2, monkeypatch):
             Column("value"),
             Function("and", conditions),
         ],
-        alias=f"{op}({SessionMRI.DURATION.value})",
+        alias=f"{op}({SessionMetricKey.DURATION.value})",
     )
     assert distribution_queries["totals"] == Query(
         match=Entity("metrics_distributions"),
         select=[select],
         groupby=[
-            Column(resolve_tag_key(org_id, "environment")),
+            AliasedExpression(
+                Column(resolve_tag_key(use_case_id, org_id, "environment")), alias="environment"
+            ),
         ],
         where=[
             Condition(Column("org_id"), Op.EQ, 1),
@@ -634,11 +742,15 @@ def test_build_snuba_query_with_derived_alias(mock_now, mock_now2, monkeypatch):
             Condition(Column("timestamp"), Op.GTE, datetime(2021, 8, 25, 0, tzinfo=pytz.utc)),
             Condition(Column("timestamp"), Op.LT, datetime(2021, 8, 26, 0, tzinfo=pytz.utc)),
             Condition(
-                Column(resolve_tag_key(org_id, "release"), entity=None),
+                Column(resolve_tag_key(use_case_id, org_id, "release"), entity=None),
                 Op.IN,
-                [resolve(org_id, "staging")],
+                resolve_tag_values(use_case_id, org_id, ["staging"]),
             ),
-            Condition(Column("metric_id"), Op.IN, [resolve(org_id, SessionMRI.RAW_DURATION.value)]),
+            Condition(
+                Column("metric_id"),
+                Op.IN,
+                [resolve(use_case_id, org_id, SessionMRI.RAW_DURATION.value)],
+            ),
         ],
         limit=Limit(3),
         offset=Offset(0),
@@ -648,7 +760,9 @@ def test_build_snuba_query_with_derived_alias(mock_now, mock_now2, monkeypatch):
         match=Entity("metrics_distributions"),
         select=[select],
         groupby=[
-            Column(resolve_tag_key(org_id, "environment")),
+            AliasedExpression(
+                Column(resolve_tag_key(use_case_id, org_id, "environment")), alias="environment"
+            ),
             Column("bucketed_time"),
         ],
         where=[
@@ -657,11 +771,15 @@ def test_build_snuba_query_with_derived_alias(mock_now, mock_now2, monkeypatch):
             Condition(Column("timestamp"), Op.GTE, datetime(2021, 8, 25, 0, tzinfo=pytz.utc)),
             Condition(Column("timestamp"), Op.LT, datetime(2021, 8, 26, 0, tzinfo=pytz.utc)),
             Condition(
-                Column(resolve_tag_key(org_id, "release"), entity=None),
+                Column(resolve_tag_key(use_case_id, org_id, "release"), entity=None),
                 Op.IN,
-                [resolve(org_id, "staging")],
+                resolve_tag_values(use_case_id, org_id, ["staging"]),
             ),
-            Condition(Column("metric_id"), Op.IN, [resolve(org_id, SessionMRI.RAW_DURATION.value)]),
+            Condition(
+                Column("metric_id"),
+                Op.IN,
+                [resolve(use_case_id, org_id, SessionMRI.RAW_DURATION.value)],
+            ),
         ],
         limit=Limit(72),
         offset=Offset(0),
@@ -671,11 +789,7 @@ def test_build_snuba_query_with_derived_alias(mock_now, mock_now2, monkeypatch):
 
 @mock.patch("sentry.snuba.sessions_v2.get_now", return_value=MOCK_NOW)
 @mock.patch("sentry.api.utils.timezone.now", return_value=MOCK_NOW)
-def test_translate_results_derived_metrics(_1, _2, monkeypatch):
-    monkeypatch.setattr(
-        "sentry.sentry_metrics.indexer.reverse_resolve", MockIndexer().reverse_resolve
-    )
-
+def test_translate_results_derived_metrics(_1, _2):
     query_params = MultiValueDict(
         {
             "groupBy": [],
@@ -691,13 +805,25 @@ def test_translate_results_derived_metrics(_1, _2, monkeypatch):
     query_definition = QueryDefinition([PseudoProject(1, 1)], query_params)
     fields_in_entities = {
         "metrics_counters": [
-            (None, SessionMRI.ERRORED_PREAGGREGATED.value),
-            (None, SessionMRI.CRASHED_AND_ABNORMAL.value),
-            (None, SessionMRI.CRASH_FREE_RATE.value),
-            (None, SessionMRI.ALL.value),
+            (
+                None,
+                SessionMRI.ERRORED_PREAGGREGATED.value,
+                f"{SessionMRI.ERRORED_PREAGGREGATED.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}",
+            ),
+            (
+                None,
+                SessionMRI.CRASHED_AND_ABNORMAL.value,
+                f"{SessionMRI.CRASHED_AND_ABNORMAL.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}",
+            ),
+            (None, SessionMRI.CRASH_FREE_RATE.value, SessionMetricKey.CRASH_FREE_RATE.value),
+            (None, SessionMRI.ALL.value, SessionMetricKey.ALL.value),
         ],
         "metrics_sets": [
-            (None, SessionMRI.ERRORED_SET.value),
+            (
+                None,
+                SessionMRI.ERRORED_SET.value,
+                f"{SessionMRI.ERRORED_SET.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}",
+            ),
         ],
     }
 
@@ -709,10 +835,10 @@ def test_translate_results_derived_metrics(_1, _2, monkeypatch):
             "totals": {
                 "data": [
                     {
-                        SessionMRI.CRASH_FREE_RATE.value: 0.5,
-                        SessionMRI.ALL.value: 8.0,
-                        SessionMRI.ERRORED_PREAGGREGATED.value: 3,
-                        SessionMRI.CRASHED_AND_ABNORMAL.value: 0,
+                        SessionMetricKey.CRASH_FREE_RATE.value: 0.5,
+                        SessionMetricKey.ALL.value: 8.0,
+                        f"{SessionMRI.ERRORED_PREAGGREGATED.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}": 3,
+                        f"{SessionMRI.CRASHED_AND_ABNORMAL.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}": 0,
                     }
                 ],
             },
@@ -720,17 +846,17 @@ def test_translate_results_derived_metrics(_1, _2, monkeypatch):
                 "data": [
                     {
                         "bucketed_time": "2021-08-24T00:00Z",
-                        SessionMRI.CRASH_FREE_RATE.value: 0.5,
-                        SessionMRI.ALL.value: 4,
-                        SessionMRI.ERRORED_PREAGGREGATED.value: 1,
-                        SessionMRI.CRASHED_AND_ABNORMAL.value: 0,
+                        SessionMetricKey.CRASH_FREE_RATE.value: 0.5,
+                        SessionMetricKey.ALL.value: 4,
+                        f"{SessionMRI.ERRORED_PREAGGREGATED.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}": 1,
+                        f"{SessionMRI.CRASHED_AND_ABNORMAL.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}": 0,
                     },
                     {
                         "bucketed_time": "2021-08-25T00:00Z",
-                        SessionMRI.CRASH_FREE_RATE.value: 0.5,
-                        SessionMRI.ALL.value: 4,
-                        SessionMRI.ERRORED_PREAGGREGATED.value: 2,
-                        SessionMRI.CRASHED_AND_ABNORMAL.value: 0,
+                        SessionMetricKey.CRASH_FREE_RATE.value: 0.5,
+                        SessionMetricKey.ALL.value: 4,
+                        f"{SessionMRI.ERRORED_PREAGGREGATED.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}": 2,
+                        f"{SessionMRI.CRASHED_AND_ABNORMAL.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}": 0,
                     },
                 ],
             },
@@ -739,22 +865,33 @@ def test_translate_results_derived_metrics(_1, _2, monkeypatch):
             "totals": {
                 "data": [
                     {
-                        SessionMRI.ERRORED_SET.value: 3,
+                        f"{SessionMRI.ERRORED_SET.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}": 3,
                     },
                 ],
             },
             "series": {
                 "data": [
-                    {"bucketed_time": "2021-08-24T00:00Z", SessionMRI.ERRORED_SET.value: 2},
-                    {"bucketed_time": "2021-08-25T00:00Z", SessionMRI.ERRORED_SET.value: 1},
+                    {
+                        "bucketed_time": "2021-08-24T00:00Z",
+                        f"{SessionMRI.ERRORED_SET.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}": 2,
+                    },
+                    {
+                        "bucketed_time": "2021-08-25T00:00Z",
+                        f"{SessionMRI.ERRORED_SET.value}{COMPOSITE_ENTITY_CONSTITUENT_ALIAS}{SessionMetricKey.ERRORED.value}": 1,
+                    },
                 ],
             },
         },
     }
 
     assert SnubaResultConverter(
-        1, query_definition.to_metrics_query(), fields_in_entities, intervals, results
-    ).translate_results() == [
+        1,
+        query_definition.to_metrics_query(),
+        fields_in_entities,
+        intervals,
+        results,
+        UseCaseKey.RELEASE_HEALTH,
+    ).translate_result_groups() == [
         {
             "by": {},
             "totals": {
@@ -773,11 +910,9 @@ def test_translate_results_derived_metrics(_1, _2, monkeypatch):
 
 @mock.patch("sentry.snuba.sessions_v2.get_now", return_value=MOCK_NOW)
 @mock.patch("sentry.api.utils.timezone.now", return_value=MOCK_NOW)
-def test_translate_results_missing_slots(_1, _2, monkeypatch):
+def test_translate_results_missing_slots(_1, _2):
     org_id = 1
-    monkeypatch.setattr(
-        "sentry.sentry_metrics.indexer.reverse_resolve", MockIndexer().reverse_resolve
-    )
+    use_case_id = UseCaseKey.RELEASE_HEALTH
     query_params = MultiValueDict(
         {
             "field": [
@@ -790,7 +925,7 @@ def test_translate_results_missing_slots(_1, _2, monkeypatch):
     query_definition = QueryDefinition([PseudoProject(1, 1)], query_params)
     fields_in_entities = {
         "metrics_counters": [
-            ("sum", SessionMRI.SESSION.value),
+            ("sum", SessionMRI.SESSION.value, "sum(sentry.sessions.session)"),
         ],
     }
 
@@ -799,23 +934,23 @@ def test_translate_results_missing_slots(_1, _2, monkeypatch):
             "totals": {
                 "data": [
                     {
-                        "metric_id": resolve(org_id, SessionMRI.SESSION.value),
-                        f"sum({SessionMRI.SESSION.value})": 400,
+                        "metric_id": resolve(use_case_id, org_id, SessionMRI.SESSION.value),
+                        "sum(sentry.sessions.session)": 400,
                     },
                 ],
             },
             "series": {
                 "data": [
                     {
-                        "metric_id": resolve(org_id, SessionMRI.SESSION.value),
+                        "metric_id": resolve(use_case_id, org_id, SessionMRI.SESSION.value),
                         "bucketed_time": "2021-08-23T00:00Z",
-                        f"sum({SessionMRI.SESSION.value})": 100,
+                        "sum(sentry.sessions.session)": 100,
                     },
                     # no data for 2021-08-24
                     {
-                        "metric_id": resolve(org_id, SessionMRI.SESSION.value),
+                        "metric_id": resolve(use_case_id, org_id, SessionMRI.SESSION.value),
                         "bucketed_time": "2021-08-25T00:00Z",
-                        f"sum({SessionMRI.SESSION.value})": 300,
+                        "sum(sentry.sessions.session)": 300,
                     },
                 ],
             },
@@ -826,8 +961,13 @@ def test_translate_results_missing_slots(_1, _2, monkeypatch):
         get_intervals(query_definition.start, query_definition.end, query_definition.rollup)
     )
     assert SnubaResultConverter(
-        org_id, query_definition.to_metrics_query(), fields_in_entities, intervals, results
-    ).translate_results() == [
+        org_id,
+        query_definition.to_metrics_query(),
+        fields_in_entities,
+        intervals,
+        results,
+        use_case_id,
+    ).translate_result_groups() == [
         {
             "by": {},
             "totals": {
@@ -844,3 +984,534 @@ def test_translate_results_missing_slots(_1, _2, monkeypatch):
 def test_get_intervals():
     with pytest.raises(AssertionError):
         list(get_intervals(MOCK_NOW - timedelta(days=1), MOCK_NOW, -3600))
+
+
+def test_translate_meta_results():
+    meta = [
+        {"name": "p50(d:transactions/measurements.lcp@millisecond)", "type": "Float64"},
+        {"name": "team_key_transaction", "type": "UInt8"},
+        {"name": "transaction", "type": "UInt64"},
+        {"name": "project_id", "type": "UInt64"},
+        {"name": "metric_id", "type": "UInt64"},
+    ]
+    assert translate_meta_results(
+        meta,
+        {
+            "p50(transaction.measurements.lcp)": MetricField(
+                op="p50",
+                metric_mri=TransactionMRI.MEASUREMENTS_LCP.value,
+                alias="p50(transaction.measurements.lcp)",
+            ),
+        },
+        {
+            "transaction": MetricGroupByField("transaction"),
+            "team_key_transaction": MetricGroupByField(
+                field=MetricField(
+                    op="team_key_transaction",
+                    metric_mri=TransactionMRI.DURATION.value,
+                    alias="team_key_transaction",
+                )
+            ),
+        },
+    ) == sorted(
+        [
+            {"name": "p50(transaction.measurements.lcp)", "type": "Float64"},
+            {"name": "team_key_transaction", "type": "boolean"},
+            {"name": "transaction", "type": "string"},
+            {"name": "project_id", "type": "UInt64"},
+            {"name": "metric_id", "type": "UInt64"},
+        ],
+        key=lambda elem: elem["name"],
+    )
+
+
+def test_translate_meta_results_with_duplicates():
+    meta = [
+        {"name": "p50(d:transactions/measurements.lcp@millisecond)", "type": "Float64"},
+        {"name": "p50(d:transactions/measurements.lcp@millisecond)", "type": "Float64"},
+        {"name": "transaction", "type": "UInt64"},
+        {"name": "transaction", "type": "UInt64"},
+        {"name": "project_id", "type": "UInt64"},
+        {"name": "project_id", "type": "UInt64"},
+    ]
+    assert translate_meta_results(
+        meta,
+        {
+            "p50(transaction.measurements.lcp)": MetricField(
+                op="p50",
+                metric_mri=TransactionMRI.MEASUREMENTS_LCP.value,
+                alias="p50(transaction.measurements.lcp)",
+            )
+        },
+        {"transaction": MetricGroupByField("transaction")},
+    ) == sorted(
+        [
+            {"name": "p50(transaction.measurements.lcp)", "type": "Float64"},
+            {"name": "transaction", "type": "string"},
+            {"name": "project_id", "type": "UInt64"},
+        ],
+        key=lambda elem: elem["name"],
+    )
+
+
+@mock.patch(
+    "sentry.snuba.metrics.query_builder.get_metric_object_from_metric_field",
+    return_value=SingularEntityDerivedMetric(
+        metric_mri=TransactionMRI.FAILURE_RATE.value,
+        metrics=[
+            TransactionMRI.FAILURE_COUNT.value,
+            TransactionMRI.ALL.value,
+        ],
+        unit="transactions",
+        snql=lambda failure_count, tx_count, org_id, metric_ids, alias=None: division_float(
+            failure_count, tx_count, alias=alias
+        ),
+        meta_type="ratio",
+    ),
+)
+def test_translate_meta_result_type_singular_entity_derived_metric(_):
+    meta = [
+        {"name": "transaction.failure_rate", "type": "Array(Float64)"},
+        {"name": "transaction", "type": "UInt64"},
+        {"name": "project_id", "type": "UInt64"},
+    ]
+    assert translate_meta_results(
+        meta,
+        {
+            "transaction.failure_rate": MetricField(
+                op=None,
+                metric_mri=TransactionMRI.FAILURE_RATE.value,
+                alias="transaction.failure_rate",
+            )
+        },
+        {"transaction": MetricGroupByField("transaction")},
+    ) == sorted(
+        [
+            {"name": "transaction.failure_rate", "type": "ratio"},
+            {"name": "transaction", "type": "string"},
+            {"name": "project_id", "type": "UInt64"},
+        ],
+        key=lambda elem: elem["name"],
+    )
+
+
+@mock.patch(
+    "sentry.snuba.metrics.query_builder.get_metric_object_from_metric_field",
+    return_value=CompositeEntityDerivedMetric(
+        metric_mri=SessionMRI.ERRORED.value,
+        metrics=[
+            SessionMRI.ERRORED_ALL.value,
+            SessionMRI.CRASHED_AND_ABNORMAL.value,
+        ],
+        meta_type="sessions",
+        unit="sessions",
+        post_query_func=lambda errored_all, crashed_abnormal: max(
+            0, errored_all - crashed_abnormal
+        ),
+    ),
+)
+def test_translate_meta_result_type_composite_entity_derived_metric(_):
+    meta = [
+        {
+            "name": "e:sessions/all_errored@none__CHILD_OF__session.errored",
+            "type": "Array(Float64)",
+        },
+    ]
+    assert translate_meta_results(
+        meta,
+        {
+            "session.errored": MetricField(
+                op=None,
+                metric_mri=SessionMRI.ERRORED.value,
+                alias="session.errored",
+            )
+        },
+        {},
+    ) == sorted(
+        [
+            {"name": "session.errored", "type": "sessions"},
+        ],
+        key=lambda elem: elem["name"],
+    )
+
+
+@pytest.mark.parametrize(
+    "select,groupby,usecase,error_string",
+    [
+        pytest.param(
+            [
+                MetricField("sum", SessionMRI.SESSION.value),
+                MetricField("count_unique", SessionMRI.USER.value),
+                MetricField("p95", SessionMRI.RAW_DURATION.value),
+            ],
+            [
+                MetricGroupByField(MetricField("sum", SessionMRI.SESSION.value)),
+            ],
+            UseCaseKey.RELEASE_HEALTH,
+            re.escape("Cannot group by metrics expression sum(sentry.sessions.session)"),
+            id="invalid grouping by metric expression - release_health",
+        ),
+        pytest.param(
+            [
+                MetricField("count", TransactionMRI.DURATION.value),
+            ],
+            [
+                MetricGroupByField(MetricField("count", TransactionMRI.DURATION.value)),
+            ],
+            UseCaseKey.PERFORMANCE,
+            re.escape("Cannot group by metrics expression count(transaction.duration)"),
+            id="invalid grouping by metric expression - performance",
+        ),
+        pytest.param(
+            [
+                MetricField(None, TransactionMRI.FAILURE_RATE.value),
+            ],
+            [
+                MetricGroupByField(MetricField(None, TransactionMRI.FAILURE_RATE.value)),
+            ],
+            UseCaseKey.PERFORMANCE,
+            "Cannot group by metric transaction.failure_rate",
+            id="invalid grouping by derived metric - release_health",
+        ),
+        pytest.param(
+            [
+                MetricField(None, SessionMRI.ERRORED.value),
+            ],
+            [
+                MetricGroupByField(MetricField(None, SessionMRI.ERRORED.value)),
+            ],
+            UseCaseKey.PERFORMANCE,
+            "Cannot group by metric session.errored",
+            id="invalid grouping by composite entity derived metric - release_health",
+        ),
+        pytest.param(
+            [
+                MetricField(
+                    "team_key_transaction",
+                    TransactionMRI.DURATION.value,
+                    params={"team_key_condition_rhs": [(1, "foo")]},
+                ),
+            ],
+            [
+                MetricGroupByField(
+                    MetricField(
+                        "team_key_transaction",
+                        TransactionMRI.DURATION.value,
+                        params={"team_key_condition_rhs": [(1, "foo")]},
+                    )
+                ),
+            ],
+            UseCaseKey.PERFORMANCE,
+            "",
+            id="valid grouping by metrics expression",
+        ),
+    ],
+)
+def test_only_can_groupby_operations_can_be_added_to_groupby(
+    select, groupby, usecase, error_string
+):
+    query_definition = MetricsQuery(
+        org_id=1,
+        project_ids=[1],
+        select=select,
+        start=MOCK_NOW - timedelta(days=90),
+        end=MOCK_NOW,
+        granularity=Granularity(3600),
+        groupby=groupby,
+    )
+    if error_string:
+        with pytest.raises(InvalidParams, match=error_string):
+            snuba_queries, _ = SnubaQueryBuilder(
+                [PseudoProject(1, 1)], query_definition, use_case_id=usecase
+            ).get_snuba_queries()
+    else:
+        snuba_queries, _ = SnubaQueryBuilder(
+            [PseudoProject(1, 1)], query_definition, use_case_id=usecase
+        ).get_snuba_queries()
+
+
+@pytest.mark.parametrize(
+    "select,where,usecase,error_string",
+    [
+        pytest.param(
+            [
+                MetricField("sum", SessionMRI.SESSION.value),
+                MetricField("count_unique", SessionMRI.USER.value),
+                MetricField("p95", SessionMRI.RAW_DURATION.value),
+            ],
+            [
+                MetricConditionField(MetricField("sum", SessionMRI.SESSION.value), Op.GTE, 10),
+            ],
+            UseCaseKey.RELEASE_HEALTH,
+            re.escape("Cannot filter by metrics expression sum(sentry.sessions.session)"),
+            id="invalid filtering by metric expression - release_health",
+        ),
+        pytest.param(
+            [
+                MetricField("count", TransactionMRI.DURATION.value),
+            ],
+            [
+                MetricConditionField(MetricField("count", TransactionMRI.DURATION.value), Op.LT, 2),
+            ],
+            UseCaseKey.PERFORMANCE,
+            re.escape("Cannot filter by metrics expression count(transaction.duration)"),
+            id="invalid filtering by metric expression - performance",
+        ),
+        pytest.param(
+            [
+                MetricField(None, TransactionMRI.FAILURE_RATE.value),
+            ],
+            [
+                MetricConditionField(
+                    MetricField(None, TransactionMRI.FAILURE_RATE.value), Op.EQ, 0.5
+                ),
+            ],
+            UseCaseKey.PERFORMANCE,
+            "Cannot filter by metric transaction.failure_rate",
+            id="invalid filtering by derived metric - release_health",
+        ),
+        pytest.param(
+            [
+                MetricField(None, SessionMRI.ERRORED.value),
+            ],
+            [
+                MetricConditionField(MetricField(None, SessionMRI.ERRORED.value), Op.EQ, 7),
+            ],
+            UseCaseKey.PERFORMANCE,
+            "Cannot filter by metric session.errored",
+            id="invalid filtering by composite entity derived metric - release_health",
+        ),
+        pytest.param(
+            [
+                MetricField(
+                    "team_key_transaction",
+                    TransactionMRI.DURATION.value,
+                    params={"team_key_condition_rhs": [(1, "foo")]},
+                ),
+            ],
+            [
+                MetricConditionField(
+                    MetricField(
+                        "team_key_transaction",
+                        TransactionMRI.DURATION.value,
+                        params={"team_key_condition_rhs": [(1, "foo")]},
+                    ),
+                    Op.EQ,
+                    1,
+                ),
+            ],
+            UseCaseKey.PERFORMANCE,
+            "",
+            id="valid filtering by metrics expression",
+        ),
+    ],
+)
+def test_only_can_filter_operations_can_be_added_to_where(select, where, usecase, error_string):
+    query_definition = MetricsQuery(
+        org_id=1,
+        project_ids=[1],
+        select=select,
+        start=MOCK_NOW - timedelta(days=90),
+        end=MOCK_NOW,
+        granularity=Granularity(3600),
+        where=where,
+    )
+    if error_string:
+        with pytest.raises(InvalidParams, match=error_string):
+            snuba_queries, _ = SnubaQueryBuilder(
+                [PseudoProject(1, 1)], query_definition, use_case_id=usecase
+            ).get_snuba_queries()
+    else:
+        snuba_queries, _ = SnubaQueryBuilder(
+            [PseudoProject(1, 1)], query_definition, use_case_id=usecase
+        ).get_snuba_queries()
+
+
+class QueryDefinitionTestCase(TestCase):
+    def test_valid_latest_release_alias_filter(self):
+        self.create_release(version="foo", project=self.project, date_added=before_now(days=4))
+        self.create_release(
+            version="bar", project=self.project, date_added=before_now(days=2)
+        )  # latest release
+
+        query_params = MultiValueDict(
+            {
+                "query": ["release:latest"],
+                "field": [
+                    "sum(sentry.sessions.session)",
+                ],
+            }
+        )
+        query = QueryDefinition([self.project], query_params)
+        assert query.parsed_query == [
+            Condition(
+                Column(name="release"),
+                Op.IN,
+                rhs=["bar"],
+            )
+        ]
+
+
+class ResolveTagsTestCase(TestCase):
+    def setUp(self):
+        self.org_id = ORG_ID
+        self.use_case_id = UseCaseKey.PERFORMANCE
+
+    def test_resolve_tags_with_unary_tuple(self):
+        transactions = ["/foo", "/bar"]
+
+        for transaction in ["transaction"] + transactions:
+            indexer.record(use_case_id=self.use_case_id, org_id=self.org_id, string=transaction)
+
+        resolved_query = resolve_tags(
+            self.use_case_id,
+            self.org_id,
+            Condition(
+                lhs=Function(
+                    function="tuple",
+                    parameters=[
+                        Column(
+                            name="tags[transaction]",
+                        )
+                    ],
+                ),
+                op=Op.IN,
+                rhs=Function(
+                    function="tuple",
+                    parameters=[(transaction,) for transaction in transactions],
+                ),
+            ),
+        )
+
+        assert resolved_query == Condition(
+            lhs=Function(
+                function="tuple",
+                parameters=[
+                    Function(
+                        function="transform",
+                        parameters=[
+                            Column(
+                                name=resolve_tag_key(self.use_case_id, self.org_id, "transaction")
+                            ),
+                            [""],
+                            [
+                                resolve_tag_value(
+                                    self.use_case_id, self.org_id, "<< unparameterized >>"
+                                )
+                            ],
+                        ],
+                    )
+                ],
+            ),
+            op=Op.IN,
+            rhs=Function(
+                function="tuple",
+                parameters=[
+                    (resolve_tag_value(self.use_case_id, self.org_id, transaction),)
+                    for transaction in transactions
+                ],
+            ),
+        )
+
+    def test_resolve_tags_with_binary_tuple(self):
+        tags = [("/foo", "ios"), ("/bar", "android")]
+
+        for transaction, platform in [("transaction", "platform")] + tags:
+            indexer.record(use_case_id=self.use_case_id, org_id=self.org_id, string=transaction)
+            indexer.record(use_case_id=self.use_case_id, org_id=self.org_id, string=platform)
+
+        resolved_query = resolve_tags(
+            self.use_case_id,
+            self.org_id,
+            Condition(
+                lhs=Function(
+                    function="tuple",
+                    parameters=[
+                        Column(
+                            name="tags[transaction]",
+                        ),
+                        Column(
+                            name="tags[platform]",
+                        ),
+                    ],
+                ),
+                op=Op.IN,
+                rhs=Function(
+                    function="tuple",
+                    parameters=[(transaction, platform) for transaction, platform in tags],
+                ),
+            ),
+        )
+
+        assert resolved_query == Condition(
+            lhs=Function(
+                function="tuple",
+                parameters=[
+                    Function(
+                        function="transform",
+                        parameters=[
+                            Column(
+                                name=resolve_tag_key(self.use_case_id, self.org_id, "transaction")
+                            ),
+                            [""],
+                            [
+                                resolve_tag_value(
+                                    self.use_case_id, self.org_id, "<< unparameterized >>"
+                                )
+                            ],
+                        ],
+                    ),
+                    Column(
+                        name=resolve_tag_key(self.use_case_id, self.org_id, "platform"),
+                    ),
+                ],
+            ),
+            op=Op.IN,
+            rhs=Function(
+                function="tuple",
+                parameters=[
+                    (
+                        resolve_tag_value(self.use_case_id, self.org_id, transaction),
+                        resolve_tag_value(self.use_case_id, self.org_id, platform),
+                    )
+                    for transaction, platform in tags
+                ],
+            ),
+        )
+
+    def test_resolve_tags_with_has(self):
+        tag_key = "transaction"
+
+        indexer.record(use_case_id=self.use_case_id, org_id=self.org_id, string=tag_key)
+
+        resolved_query = resolve_tags(
+            self.use_case_id,
+            self.org_id,
+            Condition(
+                lhs=Function(
+                    function="has",
+                    parameters=[
+                        Column(
+                            name="tags.key",
+                        ),
+                        "transaction",
+                    ],
+                ),
+                op=Op.EQ,
+                rhs=1,
+            ),
+        )
+
+        assert resolved_query == Condition(
+            lhs=Function(
+                function="has",
+                parameters=[
+                    Column(
+                        name="tags.key",
+                    ),
+                    resolve_weak(self.use_case_id, self.org_id, tag_key),
+                ],
+            ),
+            op=Op.EQ,
+            rhs=1,
+        )

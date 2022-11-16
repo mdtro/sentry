@@ -54,6 +54,7 @@ for cmd in map(
         "sentry.runner.commands.devserver.devserver",
         "sentry.runner.commands.django.django",
         "sentry.runner.commands.exec.exec_",
+        "sentry.runner.commands.sendmail.sendmail",
         "sentry.runner.commands.execfile.execfile",
         "sentry.runner.commands.files.files",
         "sentry.runner.commands.help.help",
@@ -69,6 +70,10 @@ for cmd in map(
         "sentry.runner.commands.upgrade.upgrade",
         "sentry.runner.commands.permissions.permissions",
         "sentry.runner.commands.devservices.devservices",
+        "sentry.runner.commands.performance.performance",
+        "sentry.runner.commands.performance.detect",
+        "sentry.runner.commands.spans.spans",
+        "sentry.runner.commands.spans.write_hashes",
     ),
 ):
     cli.add_command(cmd)

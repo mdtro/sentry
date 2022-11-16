@@ -9,7 +9,7 @@ import {addQueryParamsToExistingUrl} from 'sentry/utils/queryString';
 import {recordInteraction} from 'sentry/utils/recordSentryAppInteraction';
 
 type Props = {
-  components: Array<SentryAppComponent>;
+  components: SentryAppComponent[];
   filename: string;
   lineNo: number;
 };
@@ -43,7 +43,7 @@ const OpenInContextLine = ({lineNo, filename, components}: Props) => {
             openInNewTab
           >
             <SentryAppComponentIcon sentryAppComponent={component} />
-            <OpenInName>{t(`${component.sentryApp.name}`)}</OpenInName>
+            <OpenInName>{component.sentryApp.name}</OpenInName>
           </OpenInLink>
         );
       })}
@@ -70,8 +70,7 @@ export const OpenInContainer = styled('div')<{columnQuantity: number}>`
   white-space: nowrap;
 `;
 
-export const OpenInLink = styled(ExternalLink)`
-  display: inline-grid;
+const OpenInLink = styled(ExternalLink)`
   align-items: center;
   grid-template-columns: max-content auto;
   gap: ${space(0.75)};

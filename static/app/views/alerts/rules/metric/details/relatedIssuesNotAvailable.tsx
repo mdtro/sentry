@@ -23,7 +23,7 @@ export const RelatedIssuesNotAvailable = ({buttonTo, buttonText}: Props) => (
     showIcon
     trailingItems={
       <Feature features={['discover-basic']}>
-        <Button type="button" priority="default" size="xsmall" to={buttonTo}>
+        <Button type="button" priority="default" size="xs" to={buttonTo}>
           {buttonText}
         </Button>
       </Feature>
@@ -36,7 +36,7 @@ export const RelatedIssuesNotAvailable = ({buttonTo, buttonText}: Props) => (
 );
 
 const StyledAlert = styled(Alert)`
-  ${/* sc-selector */ Panel} & {
+  ${Panel} & {
     border-radius: 0;
     border-width: 1px 0;
   }

@@ -8,7 +8,7 @@ import Grid from 'sentry/components/charts/components/grid';
 import Tooltip from 'sentry/components/charts/components/tooltip';
 import XAxis from 'sentry/components/charts/components/xAxis';
 import YAxis from 'sentry/components/charts/components/yAxis';
-import EmptyStateWarning from 'sentry/components/emptyStateWarning';
+import EmptyMessage from 'sentry/components/emptyMessage';
 import {showPlayerTime} from 'sentry/components/replays/utils';
 import {t} from 'sentry/locale';
 import space from 'sentry/styles/space';
@@ -21,7 +21,7 @@ interface Props {
   memorySpans: MemorySpanType[];
   setCurrentHoverTime: (time: undefined | number) => void;
   setCurrentTime: (time: number) => void;
-  startTimestamp: number | undefined;
+  startTimestampMs: number | undefined;
 }
 
 interface MemoryChartProps extends Props {
@@ -34,7 +34,7 @@ const formatTimestamp = timestamp =>
 function MemoryChart({
   forwardedRef,
   memorySpans,
-  startTimestamp = 0,
+  startTimestampMs = 0,
   setCurrentTime,
   setCurrentHoverTime,
 }: MemoryChartProps) {
@@ -42,9 +42,12 @@ function MemoryChart({
 
   if (memorySpans.length <= 0) {
     return (
-      <EmptyStateWarning withIcon={false} small>
-        {t('No memory metrics found')}
-      </EmptyStateWarning>
+      <EmptyMessage
+        title={t('No memory metrics found')}
+        description={t(
+          'Memory metrics are only captured within Chromium based browser sessions.'
+        )}
+      />
     );
   }
 
@@ -56,7 +59,10 @@ function MemoryChart({
       right: space(1),
     }),
     tooltip: Tooltip({
+      appendToBody: true,
       trigger: 'axis',
+      renderMode: 'html',
+      chartId: 'replay-memory-chart',
       formatter: values => {
         const seriesTooltips = values.map(
           value => `
@@ -83,7 +89,7 @@ function MemoryChart({
               moment(values[0].axisValue * 1000)
                 .toDate()
                 .toUTCString(),
-              startTimestamp
+              startTimestampMs
             )}
           </div>`,
           '<div class="tooltip-arrow"></div>',
@@ -124,7 +130,7 @@ function MemoryChart({
     // with the "area" under the line.
     onMouseOver: ({data}) => {
       if (data[0]) {
-        setCurrentHoverTime((data[0] - startTimestamp) * 1000);
+        setCurrentHoverTime(data[0] * 1000 - startTimestampMs);
       }
     },
     onMouseOut: () => {
@@ -132,7 +138,7 @@ function MemoryChart({
     },
     onClick: ({data}) => {
       if (data.value) {
-        setCurrentTime((data.value - startTimestamp) * 1000);
+        setCurrentTime(data.value * 1000 - startTimestampMs);
       }
     },
   };
@@ -201,7 +207,7 @@ function MemoryChart({
   ];
 
   return (
-    <MemoryChartWrapper>
+    <MemoryChartWrapper id="replay-memory-chart">
       <AreaChart forwardedRef={forwardedRef} series={series} {...chartOptions} />
     </MemoryChartWrapper>
   );
@@ -239,7 +245,7 @@ interface MemoryChartContainerProps extends Props {
 function MemoryChartContainer({
   currentTime,
   currentHoverTime,
-  startTimestamp = 0,
+  startTimestampMs = 0,
   ...props
 }: MemoryChartContainerProps) {
   const chart = useRef<ReactEchartsRef>(null);
@@ -258,14 +264,14 @@ function MemoryChartContainer({
           markLine: {
             data: [
               {
-                xAxis: currentTime / 1000 + startTimestamp,
+                xAxis: currentTime + startTimestampMs,
               },
             ],
           },
         },
       ],
     });
-  }, [currentTime, startTimestamp, theme]);
+  }, [currentTime, startTimestampMs, theme]);
 
   useEffect(() => {
     if (!chart.current) {
@@ -282,7 +288,7 @@ function MemoryChartContainer({
               ...(currentHoverTime
                 ? [
                     {
-                      xAxis: currentHoverTime / 1000 + startTimestamp,
+                      xAxis: currentHoverTime + startTimestampMs,
                     },
                   ]
                 : []),
@@ -291,9 +297,11 @@ function MemoryChartContainer({
         },
       ],
     });
-  }, [currentHoverTime, startTimestamp, theme]);
+  }, [currentHoverTime, startTimestampMs, theme]);
 
-  return <MemoizedMemoryChart ref={chart} startTimestamp={startTimestamp} {...props} />;
+  return (
+    <MemoizedMemoryChart ref={chart} startTimestampMs={startTimestampMs} {...props} />
+  );
 }
 
 export default MemoryChartContainer;

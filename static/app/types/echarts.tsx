@@ -28,9 +28,7 @@ export type Series = {
   z?: number;
 };
 
-export type ReactEchartsRef = ReactEchartsCore & {
-  getEchartsInstance: () => ECharts;
-};
+export type ReactEchartsRef = ReactEchartsCore;
 
 export type EChartEventHandler<P> = (params: P, instance: ECharts) => void;
 
@@ -102,6 +100,8 @@ export type EChartDataZoomHandler = EChartEventHandler<{
    */
   startValue?: number;
 }>;
+
+export type DataPoint = Pick<SeriesDataUnit, 'name' | 'value'>;
 
 export type EChartRestoreHandler = EChartEventHandler<{type: 'restore'}>;
 

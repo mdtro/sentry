@@ -58,7 +58,7 @@ const ProviderItem = ({provider, active, onConfigure}: Props) => {
         <Button
           type="submit"
           name="provider"
-          size="small"
+          size="sm"
           value={provider.key}
           disabled={!hasFeature || !hasAccess}
           onClick={handleConfigure}
@@ -202,6 +202,8 @@ const LockedFeature = ({provider, features, className}: LockedFeatureProps) => (
       />
     }
   >
-    <Tag icon={<IconLock isSolid />}>{t('disabled')}</Tag>
+    <Tag role="status" icon={<IconLock isSolid />}>
+      {t('disabled')}
+    </Tag>
   </DisabledHovercard>
 );

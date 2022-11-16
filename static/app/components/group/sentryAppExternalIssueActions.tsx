@@ -7,6 +7,7 @@ import {deleteExternalIssue} from 'sentry/actionCreators/platformExternalIssues'
 import {Client} from 'sentry/api';
 import {IntegrationLink} from 'sentry/components/issueSyncListElement';
 import SentryAppComponentIcon from 'sentry/components/sentryAppComponentIcon';
+import Tooltip from 'sentry/components/tooltip';
 import {IconAdd, IconClose} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
 import space from 'sentry/styles/space';
@@ -28,6 +29,7 @@ type Props = {
   group: Group;
   sentryAppComponent: SentryAppComponent;
   sentryAppInstallation: SentryAppInstallation;
+  disabled?: boolean;
   externalIssue?: PlatformExternalIssue;
 };
 
@@ -111,12 +113,12 @@ class SentryAppExternalIssueActions extends Component<Props, State> {
   };
 
   render() {
-    const {sentryAppComponent} = this.props;
+    const {sentryAppComponent, disabled} = this.props;
     const {externalIssue} = this.state;
     const name = sentryAppComponent.sentryApp.name;
 
     let url = '#';
-    let displayName: React.ReactNode | string = tct('Link [name] Issue', {name});
+    let displayName: React.ReactNode | string = t('%s Issue', name);
 
     if (externalIssue) {
       url = externalIssue.webUrl;
@@ -127,13 +129,31 @@ class SentryAppExternalIssueActions extends Component<Props, State> {
       <IssueLinkContainer>
         <IssueLink>
           <StyledSentryAppComponentIcon sentryAppComponent={sentryAppComponent} />
-          <IntegrationLink onClick={this.doOpenModal} href={url}>
-            {displayName}
-          </IntegrationLink>
+          <Tooltip
+            title={tct('Unable to connect to [provider].', {
+              provider: sentryAppComponent.sentryApp.name,
+            })}
+            disabled={!disabled}
+            skipWrapper
+          >
+            <StyledIntegrationLink
+              onClick={e => (disabled ? e.preventDefault() : this.doOpenModal())}
+              href={disabled ? undefined : url}
+              disabled={disabled}
+            >
+              {displayName}
+            </StyledIntegrationLink>
+          </Tooltip>
         </IssueLink>
-        <StyledIcon onClick={this.onAddRemoveClick}>
-          {!!externalIssue ? <IconClose /> : <IconAdd />}
-        </StyledIcon>
+        {!disabled && (
+          <StyledIcon onClick={() => !disabled && this.onAddRemoveClick()}>
+            {externalIssue ? (
+              <IconClose aria-label={t('Remove')} />
+            ) : (
+              <IconAdd aria-label={t('Add')} />
+            )}
+          </StyledIcon>
+        )}
       </IssueLinkContainer>
     );
   }
@@ -151,6 +171,11 @@ const IssueLink = styled('div')`
   display: flex;
   align-items: center;
   min-width: 0;
+`;
+
+const StyledIntegrationLink = styled(IntegrationLink)<{disabled?: boolean}>`
+  color: ${({disabled, theme}) => (disabled ? theme.disabled : theme.textColor)};
+  ${p => p.disabled && 'cursor: not-allowed;'}
 `;
 
 const IssueLinkContainer = styled('div')`

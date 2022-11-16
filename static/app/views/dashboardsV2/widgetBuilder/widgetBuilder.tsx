@@ -5,13 +5,11 @@ import cloneDeep from 'lodash/cloneDeep';
 import isEmpty from 'lodash/isEmpty';
 import omit from 'lodash/omit';
 import set from 'lodash/set';
-import trimStart from 'lodash/trimStart';
 
 import {validateWidget} from 'sentry/actionCreators/dashboards';
-import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
+import {addSuccessMessage} from 'sentry/actionCreators/indicator';
 import {fetchOrgMembers} from 'sentry/actionCreators/members';
 import {loadOrganizationTags} from 'sentry/actionCreators/tags';
-import {generateOrderOptions} from 'sentry/components/dashboards/widgetQueriesForm';
 import DatePageFilter from 'sentry/components/datePageFilter';
 import EnvironmentPageFilter from 'sentry/components/environmentPageFilter';
 import * as Layout from 'sentry/components/layouts/thirds';
@@ -25,25 +23,20 @@ import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
 import {t} from 'sentry/locale';
 import {PageContent} from 'sentry/styles/organization';
 import space from 'sentry/styles/space';
-import {
-  DateString,
-  Organization,
-  PageFilters,
-  SelectValue,
-  TagCollection,
-} from 'sentry/types';
+import {DateString, Organization, PageFilters, TagCollection} from 'sentry/types';
 import {defined, objectIsEmpty} from 'sentry/utils';
 import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+import {CustomMeasurementsProvider} from 'sentry/utils/customMeasurements/customMeasurementsProvider';
+import EventView from 'sentry/utils/discover/eventView';
 import {
   explodeField,
   generateFieldAsString,
-  getAggregateAlias,
   getColumnsAndAggregates,
   getColumnsAndAggregatesAsStrings,
-  isEquation,
   QueryFieldValue,
 } from 'sentry/utils/discover/fields';
-import handleXhrErrorResponse from 'sentry/utils/handleXhrErrorResponse';
+import {MetricsCardinalityProvider} from 'sentry/utils/performance/contexts/metricsCardinality';
+import {MEPSettingProvider} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
 import useApi from 'sentry/utils/useApi';
 import withPageFilters from 'sentry/utils/withPageFilters';
 import withTags from 'sentry/utils/withTags';
@@ -55,17 +48,20 @@ import {
 } from 'sentry/views/dashboardsV2/layoutUtils';
 import {
   DashboardDetails,
-  DashboardListItem,
   DashboardWidgetSource,
   DisplayType,
   Widget,
   WidgetQuery,
   WidgetType,
 } from 'sentry/views/dashboardsV2/types';
+import {MetricsDataSwitcher} from 'sentry/views/performance/landing/metricsDataSwitcher';
 
 import {DEFAULT_STATS_PERIOD} from '../data';
 import {getDatasetConfig} from '../datasetConfig/base';
-import {getNumEquations} from '../utils';
+import {
+  DashboardsMEPConsumer,
+  DashboardsMEPProvider,
+} from '../widgetCard/dashboardsMEPContext';
 
 import {ColumnsStep} from './buildSteps/columnsStep';
 import {DataSetStep} from './buildSteps/dataSetStep';
@@ -79,6 +75,7 @@ import {Header} from './header';
 import {
   DataSet,
   DEFAULT_RESULTS_LIMIT,
+  generateOrderOptions,
   getIsTimeseriesChart,
   getParsedDefaultWidgetQuery,
   getResultsLimit,
@@ -94,7 +91,7 @@ const WIDGET_TYPE_TO_DATA_SET = {
   [WidgetType.RELEASE]: DataSet.RELEASES,
 };
 
-const DATA_SET_TO_WIDGET_TYPE = {
+export const DATA_SET_TO_WIDGET_TYPE = {
   [DataSet.EVENTS]: WidgetType.DISCOVER,
   [DataSet.ISSUES]: WidgetType.ISSUE,
   [DataSet.RELEASES]: WidgetType.RELEASE,
@@ -126,17 +123,18 @@ interface Props extends RouteComponentProps<RouteParams, {}> {
 }
 
 interface State {
-  dashboards: DashboardListItem[];
   dataSet: DataSet;
   displayType: Widget['displayType'];
   interval: Widget['interval'];
   limit: Widget['limit'];
   loading: boolean;
+  prebuiltWidgetId: null | string;
   queries: Widget['queries'];
+  queryConditionsValid: boolean;
   title: string;
   userHasModified: boolean;
   errors?: Record<string, any>;
-  selectedDashboard?: SelectValue<string>;
+  selectedDashboard?: DashboardDetails['id'];
   widgetToBeUpdated?: Widget;
 }
 
@@ -155,29 +153,23 @@ function WidgetBuilder({
   tags,
 }: Props) {
   const {widgetIndex, orgId, dashboardId} = params;
-  const {source, displayType, defaultTitle, defaultTableColumns, limit} = location.query;
+  const {source, displayType, defaultTitle, limit} = location.query;
   const defaultWidgetQuery = getParsedDefaultWidgetQuery(
     location.query.defaultWidgetQuery
   );
 
-  // Feature flag for new widget builder design. This feature is still a work in progress and not yet available internally.
-  const widgetBuilderNewDesign = organization.features.includes(
-    'new-widget-builder-experience-design'
-  );
-  const hasReleaseHealthFeature = organization.features.includes('dashboards-releases');
-
-  const filteredDashboardWidgets = dashboard.widgets.filter(({widgetType}) => {
-    if (widgetType === WidgetType.RELEASE) {
-      return hasReleaseHealthFeature;
-    }
-    return true;
-  });
+  // defaultTableColumns can be a single string if location.query only contains
+  // 1 value for this key. Ensure it is a string[]
+  let {defaultTableColumns}: {defaultTableColumns: string[]} = location.query;
+  if (typeof defaultTableColumns === 'string') {
+    defaultTableColumns = [defaultTableColumns];
+  }
 
   const isEditing = defined(widgetIndex);
   const widgetIndexNum = Number(widgetIndex);
   const isValidWidgetIndex =
     widgetIndexNum >= 0 &&
-    widgetIndexNum < filteredDashboardWidgets.length &&
+    widgetIndexNum < dashboard.widgets.length &&
     Number.isInteger(widgetIndexNum);
   const orgSlug = organization.slug;
 
@@ -206,37 +198,32 @@ function WidgetBuilder({
     const defaultState: State = {
       title: defaultTitle ?? t('Custom Widget'),
       displayType:
-        (widgetBuilderNewDesign && displayType === DisplayType.TOP_N
-          ? DisplayType.AREA
-          : displayType) ?? DisplayType.TABLE,
+        (displayType === DisplayType.TOP_N ? DisplayType.AREA : displayType) ??
+        DisplayType.TABLE,
       interval: '5m',
       queries: [],
       limit: limit ? Number(limit) : undefined,
       errors: undefined,
       loading: !!notDashboardsOrigin,
-      dashboards: [],
       userHasModified: false,
+      prebuiltWidgetId: null,
       dataSet: DataSet.EVENTS,
+      queryConditionsValid: true,
+      selectedDashboard: dashboard.id || NEW_DASHBOARD_ID,
     };
 
     if (defaultWidgetQuery) {
-      if (widgetBuilderNewDesign) {
-        defaultState.queries = [
-          {
-            ...defaultWidgetQuery,
-            orderby:
-              defaultWidgetQuery.orderby ||
-              generateOrderOptions({
-                widgetType: WidgetType.DISCOVER,
-                widgetBuilderNewDesign,
-                columns: defaultWidgetQuery.columns,
-                aggregates: defaultWidgetQuery.aggregates,
-              })[0].value,
-          },
-        ];
-      } else {
-        defaultState.queries = [{...defaultWidgetQuery}];
-      }
+      defaultState.queries = [
+        {
+          ...defaultWidgetQuery,
+          orderby:
+            defaultWidgetQuery.orderby ||
+            (datasetConfig.getTableSortOptions
+              ? datasetConfig.getTableSortOptions(organization, defaultWidgetQuery)[0]
+                  .value
+              : ''),
+        },
+      ];
 
       if (
         ![DisplayType.TABLE, DisplayType.TOP_N].includes(defaultState.displayType) &&
@@ -268,11 +255,16 @@ function WidgetBuilder({
     });
 
     if (objectIsEmpty(tags)) {
-      loadOrganizationTags(api, organization.slug, selection);
+      loadOrganizationTags(api, organization.slug, {
+        ...selection,
+        // Pin the request to 14d to avoid timeouts, see DD-967 for
+        // more information
+        datetime: {period: '14d', start: null, end: null, utc: null},
+      });
     }
 
     if (isEditing && isValidWidgetIndex) {
-      const widgetFromDashboard = filteredDashboardWidgets[widgetIndexNum];
+      const widgetFromDashboard = dashboard.widgets[widgetIndexNum];
 
       let queries;
       let newDisplayType = widgetFromDashboard.displayType;
@@ -285,7 +277,6 @@ function WidgetBuilder({
           displayType: newDisplayType,
           queries: widgetFromDashboard.queries,
           widgetType: widgetFromDashboard.widgetType ?? WidgetType.DISCOVER,
-          widgetBuilderNewDesign,
         }).map(query => ({
           ...query,
           // Use the last aggregate because that's where the y-axis is stored
@@ -298,7 +289,6 @@ function WidgetBuilder({
           displayType: newDisplayType,
           queries: widgetFromDashboard.queries,
           widgetType: widgetFromDashboard.widgetType ?? WidgetType.DISCOVER,
-          widgetBuilderNewDesign,
         });
       }
 
@@ -309,12 +299,13 @@ function WidgetBuilder({
         queries,
         errors: undefined,
         loading: false,
-        dashboards: [],
         userHasModified: false,
         dataSet: widgetFromDashboard.widgetType
           ? WIDGET_TYPE_TO_DATA_SET[widgetFromDashboard.widgetType]
           : DataSet.EVENTS,
         limit: newLimit,
+        prebuiltWidgetId: null,
+        queryConditionsValid: true,
       });
       setDataSetConfig(getDatasetConfig(widgetFromDashboard.widgetType));
       setWidgetToBeUpdated(widgetFromDashboard);
@@ -322,50 +313,6 @@ function WidgetBuilder({
     // This should only run once on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    async function fetchDashboards() {
-      const promise: Promise<DashboardListItem[]> = api.requestPromise(
-        `/organizations/${organization.slug}/dashboards/`,
-        {
-          method: 'GET',
-          query: {sort: 'myDashboardsAndRecentlyViewed'},
-        }
-      );
-
-      try {
-        const dashboards = await promise;
-        setState(prevState => ({...prevState, dashboards, loading: false}));
-      } catch (error) {
-        const errorMessage = t('Unable to fetch dashboards');
-        addErrorMessage(errorMessage);
-        handleXhrErrorResponse(errorMessage)(error);
-        setState(prevState => ({...prevState, loading: false}));
-      }
-    }
-
-    if (notDashboardsOrigin) {
-      fetchDashboards();
-    }
-
-    if (widgetBuilderNewDesign) {
-      setState(prevState => ({
-        ...prevState,
-        selectedDashboard: {
-          label: dashboard.title,
-          value: dashboard.id || NEW_DASHBOARD_ID,
-        },
-      }));
-    }
-  }, [
-    api,
-    dashboard.id,
-    dashboard.title,
-    notDashboardsOrigin,
-    organization.slug,
-    source,
-    widgetBuilderNewDesign,
-  ]);
 
   useEffect(() => {
     fetchOrgMembers(api, organization.slug, selection.projects?.map(String));
@@ -398,7 +345,7 @@ function WidgetBuilder({
     widgetType,
   };
 
-  const currentDashboardId = state.selectedDashboard?.value ?? dashboardId;
+  const currentDashboardId = state.selectedDashboard ?? dashboardId;
   const queryParamsWithoutSource = omit(location.query, 'source');
   const previousLocation = {
     pathname:
@@ -418,7 +365,7 @@ function WidgetBuilder({
     setState(prevState => {
       const newState = cloneDeep(prevState);
 
-      if (!!!datasetConfig.supportedDisplayTypes.includes(newDisplayType)) {
+      if (!datasetConfig.supportedDisplayTypes.includes(newDisplayType)) {
         // Set to Events dataset if Display Type is not supported by
         // current dataset
         set(
@@ -428,7 +375,6 @@ function WidgetBuilder({
             displayType: newDisplayType,
             queries: [{...getDatasetConfig(WidgetType.DISCOVER).defaultWidgetQuery}],
             widgetType: WidgetType.DISCOVER,
-            widgetBuilderNewDesign,
           })
         );
         set(newState, 'dataSet', DataSet.EVENTS);
@@ -440,7 +386,6 @@ function WidgetBuilder({
         displayType: newDisplayType,
         queries: prevState.queries,
         widgetType: DATA_SET_TO_WIDGET_TYPE[prevState.dataSet],
-        widgetBuilderNewDesign,
       });
 
       if (newDisplayType === DisplayType.TOP_N) {
@@ -485,22 +430,20 @@ function WidgetBuilder({
 
       set(newState, 'queries', normalized);
 
-      if (widgetBuilderNewDesign) {
-        if (
-          getIsTimeseriesChart(newDisplayType) &&
-          normalized[0].columns.filter(column => !!column).length
-        ) {
-          // If a limit already exists (i.e. going between timeseries) then keep it,
-          // otherwise calculate a limit
-          newState.limit =
-            prevState.limit ??
-            Math.min(
-              getResultsLimit(normalized.length, normalized[0].columns.length),
-              DEFAULT_RESULTS_LIMIT
-            );
-        } else {
-          newState.limit = undefined;
-        }
+      if (
+        getIsTimeseriesChart(newDisplayType) &&
+        normalized[0].columns.filter(column => !!column).length
+      ) {
+        // If a limit already exists (i.e. going between timeseries) then keep it,
+        // otherwise calculate a limit
+        newState.limit =
+          prevState.limit ??
+          Math.min(
+            getResultsLimit(normalized.length, normalized[0].columns.length),
+            DEFAULT_RESULTS_LIMIT
+          );
+      } else {
+        newState.limit = undefined;
       }
 
       set(newState, 'userHasModified', true);
@@ -553,6 +496,14 @@ function WidgetBuilder({
   }
 
   function handleDataSetChange(newDataSet: string) {
+    trackAdvancedAnalyticsEvent('dashboards_views.widget_builder.change', {
+      from: source,
+      field: 'dataSet',
+      value: newDataSet,
+      widget_type: widgetType,
+      organization,
+      new_widget: !isEditing,
+    });
     setState(prevState => {
       const newState = cloneDeep(prevState);
       newState.queries.splice(0, newState.queries.length);
@@ -607,29 +558,47 @@ function WidgetBuilder({
       return {...newState, errors: undefined};
     });
   }
+  function getHandleColumnFieldChange(isMetricsData?: boolean) {
+    function handleColumnFieldChange(newFields: QueryFieldValue[]) {
+      const fieldStrings = newFields.map(generateFieldAsString);
+      const splitFields = getColumnsAndAggregatesAsStrings(newFields);
+      const newState = cloneDeep(state);
+      let newQuery = cloneDeep(newState.queries[0]);
 
-  function handleColumnFieldChange(newFields: QueryFieldValue[]) {
-    const fieldStrings = newFields.map(generateFieldAsString);
-    const splitFields = getColumnsAndAggregatesAsStrings(newFields);
-    const newState = cloneDeep(state);
-    let newQuery = cloneDeep(newState.queries[0]);
+      newQuery.fields = fieldStrings;
+      newQuery.aggregates = splitFields.aggregates;
+      newQuery.columns = splitFields.columns;
+      newQuery.fieldAliases = splitFields.fieldAliases;
 
-    newQuery.fields = fieldStrings;
-    newQuery.aggregates = splitFields.aggregates;
-    newQuery.columns = splitFields.columns;
-    newQuery.fieldAliases = splitFields.fieldAliases;
+      if (datasetConfig.handleColumnFieldChangeOverride) {
+        newQuery = datasetConfig.handleColumnFieldChangeOverride(newQuery);
+      }
 
-    if (datasetConfig.handleColumnFieldChangeOverride) {
-      newQuery = datasetConfig.handleColumnFieldChangeOverride(newQuery);
+      if (datasetConfig.handleOrderByReset) {
+        // If widget is metric backed, don't default to sorting by transaction unless its the only column
+        // Sorting by transaction is not supported in metrics
+        if (
+          isMetricsData &&
+          fieldStrings.some(
+            fieldString => !['transaction', 'title'].includes(fieldString)
+          )
+        ) {
+          newQuery = datasetConfig.handleOrderByReset(
+            newQuery,
+            fieldStrings.filter(
+              fieldString => !['transaction', 'title'].includes(fieldString)
+            )
+          );
+        } else {
+          newQuery = datasetConfig.handleOrderByReset(newQuery, fieldStrings);
+        }
+      }
+
+      set(newState, 'queries', [newQuery]);
+      set(newState, 'userHasModified', true);
+      setState(newState);
     }
-
-    if (datasetConfig.handleOrderByReset) {
-      newQuery = datasetConfig.handleOrderByReset(newQuery, fieldStrings);
-    }
-
-    set(newState, 'queries', [newQuery]);
-    set(newState, 'userHasModified', true);
-    setState(newState);
+    return handleColumnFieldChange;
   }
 
   function handleYAxisChange(newFields: QueryFieldValue[]) {
@@ -691,41 +660,24 @@ function WidgetBuilder({
     const newQueries = state.queries.map(query => {
       const newQuery = cloneDeep(query);
       newQuery.columns = fieldStrings;
-      const orderby = trimStart(newQuery.orderby, '-');
-      const aggregateAliasFieldStrings = newQuery.aggregates.map(getAggregateAlias);
 
       if (!fieldStrings.length) {
         // The grouping was cleared, so clear the orderby
         newQuery.orderby = '';
-      } else if (widgetBuilderNewDesign && !newQuery.orderby) {
+      } else if (!newQuery.orderby) {
         const orderOptions = generateOrderOptions({
           widgetType: widgetType ?? WidgetType.DISCOVER,
-          widgetBuilderNewDesign,
           columns: query.columns,
           aggregates: query.aggregates,
         });
         let orderOption: string;
         // If no orderby options are available because of DISABLED_SORTS
-        if (!!!orderOptions.length && state.dataSet === DataSet.RELEASES) {
+        if (!orderOptions.length) {
           newQuery.orderby = '';
         } else {
           orderOption = orderOptions[0].value;
           newQuery.orderby = `-${orderOption}`;
         }
-      } else if (
-        !widgetBuilderNewDesign &&
-        aggregateAliasFieldStrings.length &&
-        !aggregateAliasFieldStrings.includes(orderby) &&
-        !newQuery.columns.includes(orderby) &&
-        !isEquation(orderby)
-      ) {
-        // If the orderby isn't contained in either aggregates or columns, choose the first aggregate
-        const isDescending = newQuery.orderby.startsWith('-');
-        const prefix = orderby && !isDescending ? '' : '-';
-        const firstAggregateAlias = isEquation(aggregateAliasFieldStrings[0])
-          ? `equation[${getNumEquations(aggregateAliasFieldStrings) - 1}]`
-          : aggregateAliasFieldStrings[0];
-        newQuery.orderby = `${prefix}${firstAggregateAlias}`;
       }
       return newQuery;
     });
@@ -792,19 +744,8 @@ function WidgetBuilder({
       widgetData.layout = widgetToBeUpdated?.layout;
     }
 
-    // Only Table and Top N views need orderby
-    if (!widgetBuilderNewDesign && !isTabularChart) {
-      widgetData.queries.forEach(query => {
-        query.orderby = '';
-      });
-    }
-
-    if (!widgetBuilderNewDesign) {
-      widgetData.queries.forEach(query => omit(query, 'fieldAliases'));
-    }
-
     // Only Time Series charts shall have a limit
-    if (widgetBuilderNewDesign && !isTimeseriesChart) {
+    if (!isTimeseriesChart) {
       widgetData.limit = undefined;
     }
 
@@ -826,7 +767,7 @@ function WidgetBuilder({
       return;
     }
 
-    if (!!widgetToBeUpdated) {
+    if (widgetToBeUpdated) {
       let nextWidgetList = [...dashboard.widgets];
       const updateWidgetIndex = getUpdateWidgetIndex();
       const nextWidgetData = {...widgetData, id: widgetToBeUpdated.id};
@@ -864,28 +805,7 @@ function WidgetBuilder({
   }
 
   async function dataIsValid(widgetData: Widget): Promise<boolean> {
-    if (notDashboardsOrigin) {
-      // Validate that a dashboard was selected since api call to /dashboards/widgets/ does not check for dashboard
-      if (
-        !state.selectedDashboard ||
-        !(
-          state.dashboards.find(
-            ({title, id}) =>
-              title === state.selectedDashboard?.label &&
-              id === state.selectedDashboard?.value
-          ) || state.selectedDashboard.value === NEW_DASHBOARD_ID
-        )
-      ) {
-        setState({
-          ...state,
-          errors: {...state.errors, dashboard: t('This field may not be blank')},
-        });
-        return false;
-      }
-    }
-
     setState({...state, loading: true});
-
     try {
       await validateWidget(api, organization.slug, widgetData);
       return true;
@@ -932,7 +852,7 @@ function WidgetBuilder({
     };
 
     addSuccessMessage(t('Added widget.'));
-    goToDashboards(state.selectedDashboard.value, pathQuery);
+    goToDashboards(state.selectedDashboard, pathQuery);
   }
 
   function goToDashboards(id: string, query?: Record<string, any>) {
@@ -959,11 +879,18 @@ function WidgetBuilder({
   }
 
   function isFormInvalid() {
-    if (notDashboardsOrigin && !state.selectedDashboard) {
+    if (
+      (notDashboardsOrigin && !state.selectedDashboard) ||
+      !state.queryConditionsValid
+    ) {
       return true;
     }
 
     return false;
+  }
+
+  function setQueryConditionsValid(validSearch: boolean) {
+    setState({...state, queryConditionsValid: validSearch});
   }
 
   const canAddSearchConditions =
@@ -1003,9 +930,7 @@ function WidgetBuilder({
 
   // The SortBy field shall only be displayed in tabular visualizations or
   // on time-series visualizations when at least one groupBy value is selected
-  const displaySortByStep =
-    (widgetBuilderNewDesign && isTimeseriesChart && groupByValueSelected) ||
-    isTabularChart;
+  const displaySortByStep = (isTimeseriesChart && groupByValueSelected) || isTabularChart;
 
   if (isEditing && !isValidWidgetIndex) {
     return (
@@ -1021,146 +946,189 @@ function WidgetBuilder({
     <SentryDocumentTitle title={dashboard.title} orgSlug={orgSlug}>
       <PageFiltersContainer
         defaultSelection={{
-          datetime: {start: null, end: null, utc: false, period: DEFAULT_STATS_PERIOD},
+          datetime: {start: null, end: null, utc: null, period: DEFAULT_STATS_PERIOD},
         }}
-        hideGlobalHeader
       >
-        <PageContentWithoutPadding>
-          <Header
-            orgSlug={orgSlug}
-            title={state.title}
-            dashboardTitle={dashboard.title}
-            goBackLocation={previousLocation}
-            onChangeTitle={newTitle => {
-              handleDisplayTypeOrTitleChange('title', newTitle);
-            }}
-          />
-          <Body>
-            <MainWrapper>
-              <Main>
-                <StyledPageFilterBar condensed>
-                  <ProjectPageFilter />
-                  <EnvironmentPageFilter />
-                  <DatePageFilter alignDropdown="left" />
-                </StyledPageFilterBar>
-                <BuildSteps symbol="colored-numeric">
-                  <VisualizationStep
-                    widget={currentWidget}
-                    organization={organization}
-                    pageFilters={pageFilters}
-                    displayType={state.displayType}
-                    error={state.errors?.displayType}
-                    onChange={newDisplayType => {
-                      handleDisplayTypeOrTitleChange('displayType', newDisplayType);
-                    }}
-                  />
-                  <DataSetStep
-                    dataSet={state.dataSet}
-                    displayType={state.displayType}
-                    onChange={handleDataSetChange}
-                    hasReleaseHealthFeature={hasReleaseHealthFeature}
-                  />
-                  {isTabularChart && (
-                    <ColumnsStep
-                      dataSet={state.dataSet}
-                      queries={state.queries}
-                      displayType={state.displayType}
-                      widgetType={widgetType}
-                      queryErrors={state.errors?.queries}
-                      onQueryChange={handleQueryChange}
-                      handleColumnFieldChange={handleColumnFieldChange}
-                      explodedFields={explodedFields}
-                      tags={tags}
-                      organization={organization}
-                    />
-                  )}
-                  {![DisplayType.TABLE].includes(state.displayType) && (
-                    <YAxisStep
-                      dataSet={state.dataSet}
-                      displayType={state.displayType}
-                      widgetType={widgetType}
-                      queryErrors={state.errors?.queries}
-                      onYAxisChange={newFields => {
-                        handleYAxisChange(newFields);
-                      }}
-                      aggregates={explodedAggregates}
-                      tags={tags}
-                      organization={organization}
-                    />
-                  )}
-                  <FilterResultsStep
-                    queries={state.queries}
-                    hideLegendAlias={hideLegendAlias}
-                    canAddSearchConditions={canAddSearchConditions}
-                    organization={organization}
-                    queryErrors={state.errors?.queries}
-                    onAddSearchConditions={handleAddSearchConditions}
-                    onQueryChange={handleQueryChange}
-                    onQueryRemove={handleQueryRemove}
-                    selection={pageFilters}
-                    widgetType={widgetType}
-                  />
-                  {widgetBuilderNewDesign && isTimeseriesChart && (
-                    <GroupByStep
-                      columns={columns
-                        .filter(field => !(field === 'equation|'))
-                        .map((field, index) =>
-                          explodeField({field, alias: fieldAliases[index]})
-                        )}
-                      onGroupByChange={handleGroupByChange}
-                      organization={organization}
-                      tags={tags}
-                      dataSet={state.dataSet}
-                    />
-                  )}
-                  {displaySortByStep && (
-                    <SortByStep
-                      limit={state.limit}
-                      displayType={state.displayType}
-                      queries={state.queries}
-                      dataSet={state.dataSet}
-                      widgetBuilderNewDesign={widgetBuilderNewDesign}
-                      error={state.errors?.orderby}
-                      onSortByChange={handleSortByChange}
-                      onLimitChange={handleLimitChange}
-                      organization={organization}
-                      widgetType={widgetType}
-                      tags={tags}
-                    />
-                  )}
-                </BuildSteps>
-              </Main>
-              <Footer
-                goBackLocation={previousLocation}
-                isEditing={isEditing}
-                onSave={handleSave}
-                onDelete={handleDelete}
-                invalidForm={isFormInvalid()}
-              />
-            </MainWrapper>
-            <Side>
-              <WidgetLibrary
+        <CustomMeasurementsProvider organization={organization} selection={selection}>
+          <DashboardsMEPProvider>
+            <MetricsCardinalityProvider organization={organization} location={location}>
+              <MetricsDataSwitcher
                 organization={organization}
-                widgetBuilderNewDesign={widgetBuilderNewDesign}
-                onWidgetSelect={prebuiltWidget => {
-                  setLatestLibrarySelectionTitle(prebuiltWidget.title);
-                  setDataSetConfig(
-                    getDatasetConfig(prebuiltWidget.widgetType || WidgetType.DISCOVER)
-                  );
-                  setState({
-                    ...state,
-                    ...prebuiltWidget,
-                    dataSet: prebuiltWidget.widgetType
-                      ? WIDGET_TYPE_TO_DATA_SET[prebuiltWidget.widgetType]
-                      : DataSet.EVENTS,
-                    userHasModified: false,
-                  });
-                }}
-                bypassOverwriteModal={!state.userHasModified}
-              />
-            </Side>
-          </Body>
-        </PageContentWithoutPadding>
+                eventView={EventView.fromLocation(location)}
+                location={location}
+                hideLoadingIndicator
+              >
+                {metricsDataSide => (
+                  <MEPSettingProvider
+                    location={location}
+                    forceTransactions={metricsDataSide.forceTransactionsOnly}
+                  >
+                    <PageContentWithoutPadding>
+                      <Header
+                        orgSlug={orgSlug}
+                        title={state.title}
+                        dashboardTitle={dashboard.title}
+                        goBackLocation={previousLocation}
+                        onChangeTitle={newTitle => {
+                          handleDisplayTypeOrTitleChange('title', newTitle);
+                        }}
+                      />
+                      <Body>
+                        <MainWrapper>
+                          <Main>
+                            {!organization.features.includes(
+                              'dashboards-top-level-filter'
+                            ) && (
+                              <StyledPageFilterBar condensed>
+                                <ProjectPageFilter />
+                                <EnvironmentPageFilter />
+                                <DatePageFilter alignDropdown="left" />
+                              </StyledPageFilterBar>
+                            )}
+                            <BuildSteps symbol="colored-numeric">
+                              <VisualizationStep
+                                location={location}
+                                widget={currentWidget}
+                                dashboardFilters={dashboard.filters}
+                                organization={organization}
+                                pageFilters={pageFilters}
+                                displayType={state.displayType}
+                                error={state.errors?.displayType}
+                                onChange={newDisplayType => {
+                                  handleDisplayTypeOrTitleChange(
+                                    'displayType',
+                                    newDisplayType
+                                  );
+                                }}
+                                noDashboardsMEPProvider
+                                isWidgetInvalid={!state.queryConditionsValid}
+                              />
+                              <DataSetStep
+                                dataSet={state.dataSet}
+                                displayType={state.displayType}
+                                onChange={handleDataSetChange}
+                              />
+                              {isTabularChart && (
+                                <DashboardsMEPConsumer>
+                                  {({isMetricsData}) => (
+                                    <ColumnsStep
+                                      dataSet={state.dataSet}
+                                      queries={state.queries}
+                                      displayType={state.displayType}
+                                      widgetType={widgetType}
+                                      queryErrors={state.errors?.queries}
+                                      onQueryChange={handleQueryChange}
+                                      handleColumnFieldChange={getHandleColumnFieldChange(
+                                        isMetricsData
+                                      )}
+                                      explodedFields={explodedFields}
+                                      tags={tags}
+                                      organization={organization}
+                                    />
+                                  )}
+                                </DashboardsMEPConsumer>
+                              )}
+                              {![DisplayType.TABLE].includes(state.displayType) && (
+                                <YAxisStep
+                                  dataSet={state.dataSet}
+                                  displayType={state.displayType}
+                                  widgetType={widgetType}
+                                  queryErrors={state.errors?.queries}
+                                  onYAxisChange={newFields => {
+                                    handleYAxisChange(newFields);
+                                  }}
+                                  aggregates={explodedAggregates}
+                                  tags={tags}
+                                  organization={organization}
+                                />
+                              )}
+                              <FilterResultsStep
+                                queries={state.queries}
+                                hideLegendAlias={hideLegendAlias}
+                                canAddSearchConditions={canAddSearchConditions}
+                                organization={organization}
+                                queryErrors={state.errors?.queries}
+                                onAddSearchConditions={handleAddSearchConditions}
+                                onQueryChange={handleQueryChange}
+                                onQueryRemove={handleQueryRemove}
+                                selection={pageFilters}
+                                widgetType={widgetType}
+                                dashboardFilters={dashboard.filters}
+                                location={location}
+                                onQueryConditionChange={setQueryConditionsValid}
+                              />
+                              {isTimeseriesChart && (
+                                <GroupByStep
+                                  columns={columns
+                                    .filter(field => !(field === 'equation|'))
+                                    .map((field, index) =>
+                                      explodeField({field, alias: fieldAliases[index]})
+                                    )}
+                                  onGroupByChange={handleGroupByChange}
+                                  organization={organization}
+                                  tags={tags}
+                                  dataSet={state.dataSet}
+                                />
+                              )}
+                              {displaySortByStep && (
+                                <SortByStep
+                                  limit={state.limit}
+                                  displayType={state.displayType}
+                                  queries={state.queries}
+                                  dataSet={state.dataSet}
+                                  error={state.errors?.orderby}
+                                  onSortByChange={handleSortByChange}
+                                  onLimitChange={handleLimitChange}
+                                  organization={organization}
+                                  widgetType={widgetType}
+                                  tags={tags}
+                                />
+                              )}
+                            </BuildSteps>
+                          </Main>
+                          <Footer
+                            goBackLocation={previousLocation}
+                            isEditing={isEditing}
+                            onSave={handleSave}
+                            onDelete={handleDelete}
+                            invalidForm={isFormInvalid()}
+                          />
+                        </MainWrapper>
+                        <Side>
+                          <WidgetLibrary
+                            organization={organization}
+                            selectedWidgetId={
+                              state.userHasModified ? null : state.prebuiltWidgetId
+                            }
+                            onWidgetSelect={prebuiltWidget => {
+                              setLatestLibrarySelectionTitle(prebuiltWidget.title);
+                              setDataSetConfig(
+                                getDatasetConfig(
+                                  prebuiltWidget.widgetType || WidgetType.DISCOVER
+                                )
+                              );
+                              const {id, ...prebuiltWidgetProps} = prebuiltWidget;
+                              setState({
+                                ...state,
+                                ...prebuiltWidgetProps,
+                                dataSet: prebuiltWidget.widgetType
+                                  ? WIDGET_TYPE_TO_DATA_SET[prebuiltWidget.widgetType]
+                                  : DataSet.EVENTS,
+                                userHasModified: false,
+                                prebuiltWidgetId: id || null,
+                              });
+                            }}
+                            bypassOverwriteModal={!state.userHasModified}
+                          />
+                        </Side>
+                      </Body>
+                    </PageContentWithoutPadding>
+                  </MEPSettingProvider>
+                )}
+              </MetricsDataSwitcher>
+            </MetricsCardinalityProvider>
+          </DashboardsMEPProvider>
+        </CustomMeasurementsProvider>
       </PageFiltersContainer>
     </SentryDocumentTitle>
   );

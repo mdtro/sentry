@@ -9,8 +9,10 @@ from rest_framework.exceptions import ParseError
 
 from sentry.testutils import APITestCase, SnubaTestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class OrganizationEventsFacetsEndpointTest(SnubaTestCase, APITestCase):
     def setUp(self):
         super().setUp()
@@ -503,7 +505,7 @@ class OrganizationEventsFacetsEndpointTest(SnubaTestCase, APITestCase):
             "(column 1). This is commonly caused by unmatched parentheses. Enclose any text in double quotes."
         )
 
-    @mock.patch("sentry.search.events.builder.raw_snql_query")
+    @mock.patch("sentry.search.events.builder.discover.raw_snql_query")
     def test_handling_snuba_errors(self, mock_query):
         mock_query.side_effect = ParseError("test")
         with self.feature(self.features):

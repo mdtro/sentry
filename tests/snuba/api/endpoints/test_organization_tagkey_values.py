@@ -6,6 +6,7 @@ from exam import fixture
 from sentry.search.events.constants import RELEASE_ALIAS, SEMVER_ALIAS
 from sentry.testutils import APITestCase, SnubaTestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
 from sentry.utils.samples import load_data
 
 
@@ -38,6 +39,7 @@ class OrganizationTagKeyTestCase(APITestCase, SnubaTestCase):
         return self.create_group(project=self.project)
 
 
+@region_silo_test
 class OrganizationTagKeyValuesTest(OrganizationTagKeyTestCase):
     def test_simple(self):
         self.store_event(
@@ -96,6 +98,53 @@ class OrganizationTagKeyValuesTest(OrganizationTagKeyTestCase):
             environment=self.environment.name,
             expected=[("apple", 1)],
         )
+
+    def test_env_with_order_by_count(self):
+        # this set of tags has count 5 and but very old
+        for minute in range(1, 6):
+            self.store_event(
+                data={
+                    "timestamp": iso_format(before_now(minutes=minute * 10)),
+                    "tags": {"fruit": "apple"},
+                    "environment": self.environment.name,
+                },
+                project_id=self.project.id,
+            )
+        # this set of tags has count 4 and but more fresh
+        for minute in range(1, 5):
+            self.store_event(
+                data={
+                    "timestamp": iso_format(self.min_ago),
+                    "tags": {"fruit": "orange"},
+                    "environment": self.environment.name,
+                },
+                project_id=self.project.id,
+            )
+        # default test ignore count just use timestamp
+        self.run_test(
+            "fruit",
+            environment=self.environment.name,
+            expected=[("orange", 4), ("apple", 5)],
+        )
+
+        # check new sorting but count
+        self.run_test(
+            "fruit",
+            environment=self.environment.name,
+            expected=[("apple", 5), ("orange", 4)],
+            sort="-count",
+        )
+
+    def test_invalid_sort_field(self):
+        self.store_event(
+            data={"timestamp": iso_format(self.day_ago), "tags": {"fruit": "apple"}},
+            project_id=self.project.id,
+        )
+        response = self.get_response("fruit", sort="invalid_field")
+        assert response.status_code == 400
+        assert response.data == {
+            "detail": "Invalid sort parameter. Please use one of: -last_seen or -count"
+        }
 
     def test_semver_with_env(self):
         env = self.create_environment(name="dev", project=self.project)

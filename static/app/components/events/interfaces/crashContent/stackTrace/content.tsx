@@ -1,7 +1,8 @@
 import {cloneElement, Component} from 'react';
 import styled from '@emotion/styled';
-import {PlatformIcon} from 'platformicons';
 
+import GuideAnchor from 'sentry/components/assistant/guideAnchor';
+import Panel from 'sentry/components/panels/panel';
 import {t} from 'sentry/locale';
 import {Frame, Organization, PlatformType} from 'sentry/types';
 import {Event} from 'sentry/types/event';
@@ -11,12 +12,12 @@ import withOrganization from 'sentry/utils/withOrganization';
 import Line from '../../frame/line';
 import {getImageRange, parseAddress, stackTracePlatformIcon} from '../../utils';
 
-const defaultProps = {
-  includeSystemFrames: true,
-  expandFirstFrame: true,
-};
+import StacktracePlatformIcon from './platformIcon';
 
-type DefaultProps = typeof defaultProps;
+type DefaultProps = {
+  expandFirstFrame: boolean;
+  includeSystemFrames: boolean;
+};
 
 type Props = {
   data: StacktraceType;
@@ -24,6 +25,7 @@ type Props = {
   platform: PlatformType;
   className?: string;
   isHoverPreviewed?: boolean;
+  meta?: Record<any, any>;
   newestFirst?: boolean;
   organization?: Organization;
 } & Partial<DefaultProps>;
@@ -135,6 +137,7 @@ class Content extends Component<Props, State> {
       platform,
       includeSystemFrames,
       isHoverPreviewed,
+      meta,
     } = this.props;
 
     const {showingAbsoluteAddresses, showCompleteFunctionName} = this.state;
@@ -228,6 +231,8 @@ class Content extends Component<Props, State> {
             showCompleteFunctionName={showCompleteFunctionName}
             isHoverPreviewed={isHoverPreviewed}
             isFirst={newestFirst ? frameIdx === lastFrameIdx : frameIdx === 0}
+            frameMeta={meta?.frames?.[frameIdx]}
+            registersMeta={meta?.registers}
           />
         );
       }
@@ -257,13 +262,10 @@ class Content extends Component<Props, State> {
 
     return (
       <Wrapper className={className} data-test-id="stack-trace-content">
-        <StyledPlatformIcon
-          platform={platformIcon}
-          size="20px"
-          style={{borderRadius: '3px 0 0 3px'}}
-          data-test-id={`platform-icon-${platformIcon}`}
-        />
-        <StyledList data-test-id="frames">{frames}</StyledList>
+        <StacktracePlatformIcon platform={platformIcon} />
+        <GuideAnchor target="stack_trace">
+          <StyledList data-test-id="frames">{frames}</StyledList>
+        </GuideAnchor>
       </Wrapper>
     );
   }
@@ -271,14 +273,9 @@ class Content extends Component<Props, State> {
 
 export default withOrganization(Content);
 
-const Wrapper = styled('div')`
+const Wrapper = styled(Panel)`
   position: relative;
-`;
-
-const StyledPlatformIcon = styled(PlatformIcon)`
-  position: absolute;
-  top: -1px;
-  left: -20px;
+  border-top-left-radius: 0;
 `;
 
 const StyledList = styled('ul')`
